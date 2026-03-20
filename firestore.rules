@@ -1,0 +1,111 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: users
+// Document ID: userId (uid)
+// Fields:
+//   - uid: string (required)
+//   - email: string (required, email format)
+//   - displayName: string (optional)
+//   - role: string (required, enum: PRODUCAO, QUALIDADE, ENGENHARIA_SETUP, ENGENHARIA_AUTOMACAO, ENGENHARIA_PROCESSO)
+//
+// Collection: setupRequests
+// Document ID: requestId (auto-generated)
+// Fields:
+//   - id: string (required)
+//   - line: string (required)
+//   - product: string (required)
+//   - setupType: string (required, enum: LINHAO, MEIA_LINHA)
+//   - lineDrainage: bool (required)
+//   - hasDocument: bool (required)
+//   - status: string (required, enum: PENDING_QUALITY, PENDING_SETUP, IN_PROGRESS, COMPLETED)
+//   - token: string (optional)
+//   - createdBy: string (required, uid)
+//   - createdAt: timestamp (required)
+//   - qualityAcceptedAt: timestamp (optional)
+//   - qualityFinishedAt: timestamp (optional)
+//   - setupAcceptedAt: timestamp (optional)
+//   - setupFinishedAt: timestamp (optional)
+//   - history: list (optional, list of maps with status, timestamp, userId)
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADMIN' ||
+          (request.auth.token.email == "chatgptmanagerlukas@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function hasRole(role) {
+      return isAuthenticated() && getUserRole() == role;
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'role']) &&
+             data.uid is string && data.uid.size() > 0 &&
+             data.email is string && data.email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$") &&
+             data.role in ['PRODUCAO', 'QUALIDADE', 'ENGENHARIA_SETUP', 'ENGENHARIA_AUTOMACAO', 'ENGENHARIA_PROCESSO'];
+    }
+
+    function isValidSetupRequest(data) {
+      return data.keys().hasAll(['line', 'product', 'setupType', 'lineDrainage', 'hasDocument', 'status', 'createdBy', 'createdAt']) &&
+             data.line is string && data.line.size() > 0 && data.line.size() < 100 &&
+             data.product is string && data.product.size() > 0 && data.product.size() < 100 &&
+             data.setupType in ['LINHAO', 'MEIA_LINHA'] &&
+             data.lineDrainage is bool &&
+             data.hasDocument is bool &&
+             data.status in ['PENDING_QUALITY', 'PENDING_SETUP', 'IN_PROGRESS', 'COMPLETED'] &&
+             data.createdBy == request.auth.uid &&
+             data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role;
+      allow delete: if isAdmin();
+    }
+
+    match /setupRequests/{requestId} {
+      allow read: if isAuthenticated();
+      
+      allow create: if hasRole('PRODUCAO') && isValidSetupRequest(request.resource.data);
+      
+      allow update: if isAuthenticated() && (
+        // Quality can update if pending quality
+        (hasRole('QUALIDADE') && resource.data.status == 'PENDING_QUALITY') ||
+        // Setup can update if pending setup or in progress
+        (hasRole('ENGENHARIA_SETUP') && resource.data.status in ['PENDING_SETUP', 'IN_PROGRESS']) ||
+        // Admin can update anything
+        isAdmin()
+      );
+      
+      allow delete: if isAdmin();
+    }
+  }
+}

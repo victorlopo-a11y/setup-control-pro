@@ -1,0 +1,59 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with role information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["PRODUCAO", "QUALIDADE", "ENGENHARIA_SETUP", "ENGENHARIA_AUTOMACAO", "ENGENHARIA_PROCESSO"] }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "SetupRequest": {
+      "title": "Setup Request",
+      "description": "A request for line setup and configuration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "line": { "type": "string" },
+        "product": { "type": "string" },
+        "setupType": { "type": "string", "enum": ["LINHAO", "MEIA_LINHA"] },
+        "lineDrainage": { "type": "boolean" },
+        "hasDocument": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["PENDING_QUALITY", "PENDING_SETUP", "IN_PROGRESS", "COMPLETED"] },
+        "token": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "qualityAcceptedAt": { "type": "string", "format": "date-time" },
+        "qualityFinishedAt": { "type": "string", "format": "date-time" },
+        "setupAcceptedAt": { "type": "string", "format": "date-time" },
+        "setupFinishedAt": { "type": "string", "format": "date-time" },
+        "history": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "status": { "type": "string" },
+              "timestamp": { "type": "string", "format": "date-time" },
+              "userId": { "type": "string" }
+            }
+          }
+        }
+      },
+      "required": ["line", "product", "setupType", "lineDrainage", "hasDocument", "status", "createdBy", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/setupRequests/{requestId}": {
+      "schema": "SetupRequest",
+      "description": "Setup requests and their lifecycle"
+    }
+  }
+}
