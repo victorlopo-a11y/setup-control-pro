@@ -1,1 +1,89 @@
 @import "tailwindcss";
+
+html.dark {
+  color-scheme: dark;
+}
+
+html.dark body {
+  background: #0b1220;
+}
+
+html.dark .bg-zinc-50 {
+  background-color: #0b1220 !important;
+}
+
+html.dark .bg-white {
+  background-color: #111827 !important;
+}
+
+html.dark .bg-zinc-100 {
+  background-color: #1f2937 !important;
+}
+
+html.dark .border-zinc-100,
+html.dark .border-zinc-200,
+html.dark .border-zinc-300,
+html.dark .border-dashed {
+  border-color: #374151 !important;
+}
+
+html.dark .text-zinc-900 {
+  color: #f3f4f6 !important;
+}
+
+html.dark .text-zinc-800 {
+  color: #e5e7eb !important;
+}
+
+html.dark .text-zinc-700 {
+  color: #d1d5db !important;
+}
+
+html.dark .text-zinc-600 {
+  color: #cbd5e1 !important;
+}
+
+html.dark .text-zinc-500,
+html.dark .text-zinc-400 {
+  color: #94a3b8 !important;
+}
+
+html.dark .hover\:bg-zinc-50:hover,
+html.dark .hover\:bg-zinc-100:hover {
+  background-color: #374151 !important;
+}
+
+html.dark input,
+html.dark select,
+html.dark textarea {
+  background-color: #0f172a !important;
+  color: #e5e7eb !important;
+  border-color: #334155 !important;
+}
+
+html.dark .bg-emerald-50,
+html.dark .bg-indigo-50,
+html.dark .bg-sky-50,
+html.dark .bg-cyan-50,
+html.dark .bg-amber-50,
+html.dark .bg-orange-50,
+html.dark .bg-rose-50,
+html.dark .bg-stone-100,
+html.dark .bg-stone-200,
+html.dark .bg-teal-50,
+html.dark .bg-teal-100,
+html.dark .bg-fuchsia-100,
+html.dark .bg-purple-50,
+html.dark .bg-blue-50 {
+  filter: brightness(0.82);
+}
+
+html.dark .setup-chip {
+  background-color: #1e293b !important;
+  border-color: #334155 !important;
+  color: #e2e8f0 !important;
+}
+
+html.dark .setup-chip svg {
+  color: #93c5fd !important;
+}
