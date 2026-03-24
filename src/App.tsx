@@ -34,7 +34,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { format, formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { supabase } from './supabase';
+import { isSupabaseConfigured, supabase, supabaseConfigError } from './supabase';
 
 // Types
 type UserRole = 'PRODUCAO' | 'QUALIDADE' | 'AREA_KIT' | 'ENGENHARIA_SETUP' | 'ENGENHARIA_TESTE' | 'ENGENHARIA_AUTOMACAO' | 'ENGENHARIA_PROCESSO';
@@ -417,6 +417,21 @@ const LoadingScreen = () => (
   </div>
 );
 
+const ConfigErrorScreen = ({ message }: { message: string }) => (
+  <div className="min-h-screen bg-zinc-50 p-6 flex items-center justify-center">
+    <div className="w-full max-w-2xl rounded-2xl border border-amber-200 bg-white p-6 shadow-sm">
+      <h1 className="text-xl font-bold text-zinc-900 mb-2">Configuração pendente no deploy</h1>
+      <p className="text-sm text-zinc-700 mb-3">{message}</p>
+      <p className="text-sm text-zinc-700 mb-1">Na Netlify, configure estas variáveis de ambiente:</p>
+      <ul className="text-sm text-zinc-800 list-disc pl-5">
+        <li><code>VITE_SUPABASE_URL</code></li>
+        <li><code>VITE_SUPABASE_ANON_KEY</code></li>
+      </ul>
+      <p className="text-xs text-zinc-500 mt-4">Após salvar, faça novo deploy.</p>
+    </div>
+  </div>
+);
+
 const LoginScreen = () => {
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [name, setName] = useState('');
@@ -747,6 +762,10 @@ export default function App() {
 
   // Auth Listener
   useEffect(() => {
+    if (!isSupabaseConfigured) {
+      setLoading(false);
+      return;
+    }
     let active = true;
 
     const initSession = async () => {
@@ -772,6 +791,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!isSupabaseConfigured) return;
     if (!user) {
       setProfile(null);
       return;
@@ -805,6 +825,7 @@ export default function App() {
 
   // Requests Listener
   useEffect(() => {
+    if (!isSupabaseConfigured) return;
     if (!user || !profile) return;
 
     const loadRequests = async () => {
@@ -1539,6 +1560,7 @@ export default function App() {
   }, [requestPage, totalRequestPages]);
 
   if (loading) return <LoadingScreen />;
+  if (!isSupabaseConfigured) return <ConfigErrorScreen message={supabaseConfigError} />;
   if (!user) return <LoginScreen />;
   if (!profile) return <RoleSelection onSelect={handleRoleSelect} />;
 
