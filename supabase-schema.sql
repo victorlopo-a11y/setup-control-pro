@@ -7,7 +7,7 @@ create table if not exists public.users (
   id uuid primary key references auth.users(id) on delete cascade,
   email text not null,
   display_name text not null,
-  role text not null check (role in ('PRODUCAO', 'QUALIDADE', 'AREA_KIT', 'ENGENHARIA_SETUP', 'ENGENHARIA_TESTE', 'ENGENHARIA_AUTOMACAO', 'ENGENHARIA_PROCESSO')),
+  role text not null check (role in ('PRODUCAO', 'QUALIDADE', 'AREA_KIT', 'ENGENHARIA_SETUP', 'ENGENHARIA_TESTE', 'ENGENHARIA_AUTOMACAO', 'ENGENHARIA_PROCESSO', 'ALMOXERIFADO')),
   created_at timestamptz not null default now()
 );
 
@@ -30,6 +30,8 @@ create table if not exists public.setup_requests (
   automacao_pending_at timestamptz,
   material_in_line_confirmed boolean,
   material_in_line_checked_at timestamptz,
+  quality_document_received_by text,
+  kit_material_received_by text,
   teste_checklist jsonb not null default '[]'::jsonb,
   teste_checklist_completed boolean not null default false,
   teste_checklist_completed_at timestamptz,
@@ -62,6 +64,39 @@ create table if not exists public.setup_requests (
   history jsonb not null default '[]'::jsonb
 );
 
+create table if not exists public.oppo_requests (
+  id uuid primary key default gen_random_uuid(),
+  call_type text not null check (call_type in ('SOLICITACAO_DISPOSITIVO', 'DEVOLUCAO_DISPOSITIVO')),
+  status text not null check (status in ('ABERTO', 'SEPARACAO', 'CONFERINDO', 'FINALIZADO_ALMOXERIFADO', 'CONCLUIDO', 'DIVERGENCIA')),
+  line text,
+  product text,
+  line_type text check (line_type in ('MONTAGEM/TESTE', 'EMBALAGEM')),
+  created_by uuid not null references auth.users(id) on delete cascade,
+  created_by_name text,
+  almox_by uuid references auth.users(id) on delete set null,
+  almox_by_name text,
+  requested_at timestamptz not null default now(),
+  accepted_at timestamptz,
+  finalized_at timestamptz,
+  requester_confirmed_at timestamptz,
+  requester_confirmed boolean,
+  requester_confirmed_by uuid references auth.users(id) on delete set null,
+  requester_confirmed_by_name text,
+  return_items_note text,
+  return_items_selected jsonb not null default '[]'::jsonb,
+  paid_items_selected jsonb not null default '[]'::jsonb,
+  paid_items_note text,
+  notes text
+);
+
+create table if not exists public.oppo_setup_layouts (
+  product_key text primary key,
+  posts jsonb not null default '[]'::jsonb,
+  updated_at timestamptz not null default now(),
+  updated_by uuid references auth.users(id) on delete set null,
+  updated_by_name text
+);
+
 -- Migration helpers for existing projects
 alter table public.setup_requests add column if not exists sa_paid_by_kit boolean not null default true;
 alter table public.setup_requests add column if not exists checklist_url text;
@@ -75,6 +110,8 @@ alter table public.setup_requests add column if not exists processo_pending_at t
 alter table public.setup_requests add column if not exists automacao_pending_at timestamptz;
 alter table public.setup_requests add column if not exists material_in_line_confirmed boolean;
 alter table public.setup_requests add column if not exists material_in_line_checked_at timestamptz;
+alter table public.setup_requests add column if not exists quality_document_received_by text;
+alter table public.setup_requests add column if not exists kit_material_received_by text;
 alter table public.setup_requests add column if not exists teste_checklist jsonb not null default '[]'::jsonb;
 alter table public.setup_requests add column if not exists teste_checklist_completed boolean not null default false;
 alter table public.setup_requests add column if not exists teste_checklist_completed_at timestamptz;
@@ -96,6 +133,41 @@ alter table public.setup_requests add column if not exists processo_finished_at 
 alter table public.setup_requests add column if not exists automacao_accepted_at timestamptz;
 alter table public.setup_requests add column if not exists automacao_finished_at timestamptz;
 alter table public.setup_requests add column if not exists created_by_name text;
+
+alter table public.oppo_requests add column if not exists call_type text;
+alter table public.oppo_requests add column if not exists status text;
+alter table public.oppo_requests add column if not exists line text;
+alter table public.oppo_requests add column if not exists product text;
+alter table public.oppo_requests add column if not exists line_type text;
+alter table public.oppo_requests add column if not exists created_by uuid;
+alter table public.oppo_requests add column if not exists created_by_name text;
+alter table public.oppo_requests add column if not exists almox_by uuid;
+alter table public.oppo_requests add column if not exists almox_by_name text;
+alter table public.oppo_requests add column if not exists requested_at timestamptz;
+alter table public.oppo_requests add column if not exists accepted_at timestamptz;
+alter table public.oppo_requests add column if not exists finalized_at timestamptz;
+alter table public.oppo_requests add column if not exists requester_confirmed_at timestamptz;
+alter table public.oppo_requests add column if not exists requester_confirmed boolean;
+alter table public.oppo_requests add column if not exists requester_confirmed_by uuid;
+alter table public.oppo_requests add column if not exists requester_confirmed_by_name text;
+alter table public.oppo_requests add column if not exists return_items_note text;
+alter table public.oppo_requests add column if not exists return_items_selected jsonb not null default '[]'::jsonb;
+alter table public.oppo_requests add column if not exists paid_items_selected jsonb not null default '[]'::jsonb;
+alter table public.oppo_requests add column if not exists paid_items_note text;
+alter table public.oppo_requests add column if not exists notes text;
+
+create table if not exists public.oppo_setup_layouts (
+  product_key text primary key,
+  posts jsonb not null default '[]'::jsonb,
+  updated_at timestamptz not null default now(),
+  updated_by uuid references auth.users(id) on delete set null,
+  updated_by_name text
+);
+alter table public.oppo_setup_layouts add column if not exists product_key text;
+alter table public.oppo_setup_layouts add column if not exists posts jsonb not null default '[]'::jsonb;
+alter table public.oppo_setup_layouts add column if not exists updated_at timestamptz not null default now();
+alter table public.oppo_setup_layouts add column if not exists updated_by uuid;
+alter table public.oppo_setup_layouts add column if not exists updated_by_name text;
 
 -- Optional backfill for old rows (if public.users has the profile)
 update public.setup_requests sr
@@ -120,15 +192,22 @@ where sr.created_by = au.id
 alter table public.users drop constraint if exists users_role_check;
 alter table public.users
   add constraint users_role_check
-  check (role in ('PRODUCAO', 'QUALIDADE', 'AREA_KIT', 'ENGENHARIA_SETUP', 'ENGENHARIA_TESTE', 'ENGENHARIA_AUTOMACAO', 'ENGENHARIA_PROCESSO'));
+  check (role in ('PRODUCAO', 'QUALIDADE', 'AREA_KIT', 'ENGENHARIA_SETUP', 'ENGENHARIA_TESTE', 'ENGENHARIA_AUTOMACAO', 'ENGENHARIA_PROCESSO', 'ALMOXERIFADO'));
 
 alter table public.setup_requests drop constraint if exists setup_requests_status_check;
 alter table public.setup_requests
   add constraint setup_requests_status_check
   check (status in ('PENDING_QUALITY', 'PENDING_KIT', 'PENDING_QUALITY_AND_KIT', 'PENDING_SETUP_AND_KIT', 'PENDING_SETUP', 'IN_PROGRESS', 'PENDING_KIT_AFTER_SETUP', 'PENDING_TESTE', 'TESTE_IN_PROGRESS', 'PENDING_PROCESSO', 'PROCESSO_IN_PROGRESS', 'PENDING_AUTOMACAO', 'AUTOMACAO_IN_PROGRESS', 'COMPLETED'));
 
+alter table public.oppo_requests drop constraint if exists oppo_requests_status_check;
+alter table public.oppo_requests
+  add constraint oppo_requests_status_check
+  check (status in ('ABERTO', 'SEPARACAO', 'CONFERINDO', 'FINALIZADO_ALMOXERIFADO', 'CONCLUIDO', 'DIVERGENCIA'));
+
 alter table public.users enable row level security;
 alter table public.setup_requests enable row level security;
+alter table public.oppo_requests enable row level security;
+alter table public.oppo_setup_layouts enable row level security;
 
 drop policy if exists "users_select_own" on public.users;
 create policy "users_select_own"
@@ -180,3 +259,54 @@ create policy "setup_requests_delete_dev_only"
   for delete
   to authenticated
   using (lower(auth.jwt() ->> 'email') in ('victor.lopo@grupomultilaser.com.br'));
+
+drop policy if exists "oppo_requests_select_all_authenticated" on public.oppo_requests;
+create policy "oppo_requests_select_all_authenticated"
+  on public.oppo_requests
+  for select
+  to authenticated
+  using (true);
+
+drop policy if exists "oppo_requests_insert_authenticated" on public.oppo_requests;
+create policy "oppo_requests_insert_authenticated"
+  on public.oppo_requests
+  for insert
+  to authenticated
+  with check (auth.uid() = created_by);
+
+drop policy if exists "oppo_requests_update_authenticated" on public.oppo_requests;
+create policy "oppo_requests_update_authenticated"
+  on public.oppo_requests
+  for update
+  to authenticated
+  using (true)
+  with check (true);
+
+drop policy if exists "oppo_setup_layouts_select_all_authenticated" on public.oppo_setup_layouts;
+create policy "oppo_setup_layouts_select_all_authenticated"
+  on public.oppo_setup_layouts
+  for select
+  to authenticated
+  using (true);
+
+drop policy if exists "oppo_setup_layouts_insert_authenticated" on public.oppo_setup_layouts;
+create policy "oppo_setup_layouts_insert_authenticated"
+  on public.oppo_setup_layouts
+  for insert
+  to authenticated
+  with check (true);
+
+drop policy if exists "oppo_setup_layouts_update_authenticated" on public.oppo_setup_layouts;
+create policy "oppo_setup_layouts_update_authenticated"
+  on public.oppo_setup_layouts
+  for update
+  to authenticated
+  using (true)
+  with check (true);
+
+drop policy if exists "oppo_setup_layouts_delete_authenticated" on public.oppo_setup_layouts;
+create policy "oppo_setup_layouts_delete_authenticated"
+  on public.oppo_setup_layouts
+  for delete
+  to authenticated
+  using (true);

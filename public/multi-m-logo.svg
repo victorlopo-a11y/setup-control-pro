@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 250 250" role="img" aria-label="Multi">
+  <rect width="250" height="250" fill="#1554D1"/>
+  <path
+    d="M40 190V95c0-18 14-32 32-32s31 14 32 31l8 62c1 8 8 14 16 14s15-6 16-14l8-62c1-17 14-31 32-31s32 14 32 32v95"
+    fill="none"
+    stroke="#F4F5F7"
+    stroke-width="20"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>
