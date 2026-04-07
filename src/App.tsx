@@ -206,6 +206,7 @@ interface NotificationItem {
   createdAt: string;
   read: boolean;
 }
+type NotificationSignatureMap = Partial<Record<UserRole, string[]>>;
 
 type InterfaceTheme = 'default' | 'ocean' | 'graphite' | 'sunset';
 
@@ -788,6 +789,19 @@ const isRequestAssignedToRole = (role: UserRole, request: SetupRequest) => {
   return false;
 };
 
+const normalizeNotificationSignaturesFromMetadata = (value: any): NotificationSignatureMap => {
+  if (!value || typeof value !== 'object') return {};
+  const next: NotificationSignatureMap = {};
+  Object.entries(value as Record<string, any>).forEach(([roleKey, signatures]) => {
+    if (!Array.isArray(signatures)) return;
+    const clean = signatures.filter((s) => typeof s === 'string' && s.trim().length > 0).slice(-400) as string[];
+    if (clean.length > 0) {
+      next[roleKey as UserRole] = clean;
+    }
+  });
+  return next;
+};
+
 const isOppoRequestNotificationTarget = (role: UserRole, request: OppoRequest, userId?: string) => {
   if (role === 'ALMOXERIFADO') {
     if (request.callType === 'SOLICITACAO_DISPOSITIVO') {
@@ -885,11 +899,15 @@ const LoginScreen = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<UserRole>('PRODUCAO');
+  const [showSignupRoleMenu, setShowSignupRoleMenu] = useState(false);
   const [loadingAuth, setLoadingAuth] = useState(false);
   const [loadingForgot, setLoadingForgot] = useState(false);
   const [forgotCooldown, setForgotCooldown] = useState(0);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const signupRoleMenuRef = useRef<HTMLDivElement | null>(null);
+  const selectedSignupRole = ROLE_OPTIONS.find((item) => item.id === role) || ROLE_OPTIONS[0];
+  const SelectedSignupRoleIcon = selectedSignupRole.icon;
 
   const formatAuthError = (message: string) => {
     const normalized = message.toLowerCase();
@@ -912,6 +930,18 @@ const LoginScreen = () => {
     }, 1000);
     return () => window.clearInterval(timer);
   }, [forgotCooldown]);
+
+  useEffect(() => {
+    if (!showSignupRoleMenu) return;
+    const onMouseDown = (event: MouseEvent) => {
+      if (!signupRoleMenuRef.current) return;
+      if (!signupRoleMenuRef.current.contains(event.target as Node)) {
+        setShowSignupRoleMenu(false);
+      }
+    };
+    window.addEventListener('mousedown', onMouseDown);
+    return () => window.removeEventListener('mousedown', onMouseDown);
+  }, [showSignupRoleMenu]);
 
   const handleLogin = async () => {
     setLoadingAuth(true);
@@ -1027,7 +1057,10 @@ const LoginScreen = () => {
           <div className="mb-6 grid grid-cols-2 rounded-xl bg-zinc-100 p-1">
             <button
               type="button"
-              onClick={() => setMode('login')}
+              onClick={() => {
+                setMode('login');
+                setShowSignupRoleMenu(false);
+              }}
               className={`rounded-lg px-4 py-2 text-sm font-bold transition-all ${mode === 'login' ? 'bg-white text-zinc-900 shadow' : 'text-zinc-500'}`}
             >
               Entrar
@@ -1096,15 +1129,50 @@ const LoginScreen = () => {
             {mode === 'signup' && (
               <div className="space-y-1">
                 <label className="text-sm font-bold text-zinc-700">Setor</label>
-                <select
-                  value={role}
-                  onChange={(e) => setRole(e.target.value as UserRole)}
-                  className="w-full rounded-xl border border-zinc-200 bg-white px-4 py-3 font-medium text-zinc-700 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200"
-                >
-                  {ROLE_OPTIONS.map((item) => (
-                    <option key={item.id} value={item.id}>{item.label}</option>
-                  ))}
-                </select>
+                <div ref={signupRoleMenuRef} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setShowSignupRoleMenu((prev) => !prev)}
+                    className="flex w-full items-center justify-between rounded-xl border border-zinc-200 bg-white px-3 py-3 text-left transition hover:border-emerald-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200"
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className={`inline-flex h-7 w-7 items-center justify-center rounded-lg ${selectedSignupRole.color}`}>
+                        <SelectedSignupRoleIcon size={14} />
+                      </span>
+                      <span className="text-sm font-bold text-zinc-800">{selectedSignupRole.label}</span>
+                    </span>
+                    <ChevronDown size={16} className={`text-zinc-500 transition-transform ${showSignupRoleMenu ? 'rotate-180' : ''}`} />
+                  </button>
+                  {showSignupRoleMenu && (
+                    <div className="absolute z-20 mt-1.5 max-h-64 w-full overflow-y-auto rounded-2xl border border-zinc-200 bg-white p-1.5 shadow-2xl">
+                      {ROLE_OPTIONS.map((item) => {
+                        const ItemIcon = item.icon;
+                        const isActive = role === item.id;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => {
+                              setRole(item.id);
+                              setShowSignupRoleMenu(false);
+                            }}
+                            className={`mb-1 flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-sm font-semibold transition ${
+                              isActive
+                                ? 'bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200'
+                                : 'text-zinc-700 hover:bg-zinc-100'
+                            }`}
+                          >
+                            <span className={`inline-flex h-7 w-7 items-center justify-center rounded-lg ${item.color}`}>
+                              <ItemIcon size={14} />
+                            </span>
+                            <span className="flex-1">{item.label}</span>
+                            {isActive && <CheckCircle size={15} className="text-emerald-600" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -1184,6 +1252,8 @@ export default function App() {
   const [showDevRoleMenu, setShowDevRoleMenu] = useState(false);
   const [activeMainTab, setActiveMainTab] = useState<'OPERACAO' | 'SLA' | 'OPPO' | 'OPPO_SETUP' | 'ALMOXERIFADO'>('OPERACAO');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [clearedNotificationSignaturesByRole, setClearedNotificationSignaturesByRole] = useState<NotificationSignatureMap>({});
+  const [notificationSignaturesHydrated, setNotificationSignaturesHydrated] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isRefreshingRequests, setIsRefreshingRequests] = useState(false);
@@ -1307,13 +1377,24 @@ export default function App() {
   }, [user?.id, user?.user_metadata?.oppo_setup_layout_drafts]);
 
   useEffect(() => {
+    if (!user) {
+      setClearedNotificationSignaturesByRole({});
+      setNotificationSignaturesHydrated(false);
+      return;
+    }
+    setClearedNotificationSignaturesByRole(
+      normalizeNotificationSignaturesFromMetadata(user.user_metadata?.cleared_notification_signatures_by_role)
+    );
+    setNotificationSignaturesHydrated(true);
+  }, [user?.id, user?.user_metadata?.cleared_notification_signatures_by_role]);
+
+  useEffect(() => {
     if (!isSupabaseConfigured || !user) return;
     const currentPreference = `${user.user_metadata?.theme_preference || ''}`.toLowerCase();
     const desiredPreference = isDarkMode ? 'dark' : 'light';
     if (currentPreference === desiredPreference) return;
     supabase.auth.updateUser({
       data: {
-        ...user.user_metadata,
         theme_preference: desiredPreference,
       },
     }).catch((error) => {
@@ -1327,7 +1408,6 @@ export default function App() {
     if (currentInterfaceTheme === interfaceTheme) return;
     supabase.auth.updateUser({
       data: {
-        ...user.user_metadata,
         interface_theme: interfaceTheme,
       },
     }).catch((error) => {
@@ -1342,7 +1422,6 @@ export default function App() {
     const timer = window.setTimeout(() => {
       supabase.auth.updateUser({
         data: {
-          ...user.user_metadata,
           oppo_setup_layout_drafts: oppoSetupLayoutDraftsByProduct,
         },
       }).catch((error) => {
@@ -1351,6 +1430,22 @@ export default function App() {
     }, 500);
     return () => window.clearTimeout(timer);
   }, [oppoSetupLayoutDraftsByProduct, user?.id, user?.user_metadata?.oppo_setup_layout_drafts]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !user) return;
+    const currentSignatures = normalizeNotificationSignaturesFromMetadata(user.user_metadata?.cleared_notification_signatures_by_role);
+    if (JSON.stringify(currentSignatures) === JSON.stringify(clearedNotificationSignaturesByRole)) return;
+    const timer = window.setTimeout(() => {
+      supabase.auth.updateUser({
+        data: {
+          cleared_notification_signatures_by_role: clearedNotificationSignaturesByRole,
+        },
+      }).catch((error) => {
+        console.error('Erro ao salvar assinaturas de limpeza de notificações no Supabase:', error);
+      });
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [clearedNotificationSignaturesByRole, user?.id, user?.user_metadata?.cleared_notification_signatures_by_role]);
 
   useEffect(() => {
     if (!showOppoSetupPostsModal) return;
@@ -2309,7 +2404,6 @@ export default function App() {
     const cleanTitle = jobTitleDraft.trim();
     const { data, error } = await supabase.auth.updateUser({
       data: {
-        ...user.user_metadata,
         job_title: cleanTitle || null,
       },
     });
@@ -3217,6 +3311,50 @@ export default function App() {
     return getOppoStatusStyle(n.status as OppoRequestStatus);
   };
 
+  const buildSetupNotificationSignature = (req: SetupRequest, role: UserRole) =>
+    `SETUP:${role}:${req.id}:${req.status}`;
+  const buildOppoNotificationSignature = (req: OppoRequest, role: UserRole) =>
+    `OPPO:${role}:${req.id}:${req.status}`;
+
+  const clearCurrentRoleNotifications = () => {
+    const roleKey = currentRole;
+    const setupSigs = requests
+      .filter((req) => isRequestAssignedToRole(roleKey, req))
+      .map((req) => buildSetupNotificationSignature(req, roleKey));
+    const oppoSigs = oppoRequests
+      .filter((req) => isOppoRequestNotificationTarget(roleKey, req, user.id))
+      .map((req) => buildOppoNotificationSignature(req, roleKey));
+    const all = Array.from(new Set([...setupSigs, ...oppoSigs])).slice(-400);
+
+    setClearedNotificationSignaturesByRole((prev) => ({
+      ...prev,
+      [roleKey]: all,
+    }));
+    setNotifications((prev) => prev.filter((n) => n.role !== roleKey));
+
+    requestStatusSnapshotByRole.current[roleKey] = Object.fromEntries(requests.map((req) => [req.id, req.status])) as Record<string, SetupRequest['status']>;
+    oppoStatusSnapshotByRole.current[roleKey] = Object.fromEntries(oppoRequests.map((req) => [req.id, req.status])) as Record<string, OppoRequestStatus>;
+    bootstrappedRoleNotifications.current.add(roleKey);
+    bootstrappedOppoRoleNotifications.current.add(roleKey);
+    if (isSupabaseConfigured && user) {
+      supabase.auth.updateUser({
+        data: {
+          cleared_notification_signatures_by_role: {
+            ...normalizeNotificationSignaturesFromMetadata(user.user_metadata?.cleared_notification_signatures_by_role),
+            [roleKey]: all,
+          },
+        },
+      }).catch((error) => {
+        console.error('Erro ao salvar limpeza de notificações no Supabase:', error);
+      });
+    }
+  };
+
+  const markCurrentRoleNotificationsAsRead = () => {
+    const roleKey = currentRole;
+    setNotifications((prev) => prev.map((n) => (n.role === roleKey ? { ...n, read: true } : n)));
+  };
+
   const playNotificationSound = () => {
     try {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
@@ -3247,7 +3385,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!user || !profile) return;
+    if (!user || !profile || !notificationSignaturesHydrated) return;
 
     const roleKey = currentRole;
     const previousSnapshot = requestStatusSnapshotByRole.current[roleKey] || {};
@@ -3263,6 +3401,7 @@ export default function App() {
     }
 
     const incoming: NotificationItem[] = [];
+    const clearedForRole = new Set(clearedNotificationSignaturesByRole[roleKey] || []);
 
     requests.forEach((req) => {
       const prevStatus = previousSnapshot[req.id];
@@ -3271,6 +3410,8 @@ export default function App() {
       const changed = !!prevStatus && prevStatus !== req.status;
       if (!isNewForSnapshot && !changed) return;
       if (!isRequestAssignedToRole(roleKey, req)) return;
+      const signature = buildSetupNotificationSignature(req, roleKey);
+      if (clearedForRole.has(signature)) return;
 
       incoming.push({
         id: `${roleKey}-${req.id}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -3289,10 +3430,10 @@ export default function App() {
       setNotifications((prev) => [...incoming, ...prev].slice(0, 120));
       if (roleKey === 'ALMOXERIFADO') playNotificationSound();
     }
-  }, [requests, currentRole, user, profile]);
+  }, [requests, currentRole, user, profile, clearedNotificationSignaturesByRole, notificationSignaturesHydrated]);
 
   useEffect(() => {
-    if (!user || !profile) return;
+    if (!user || !profile || !notificationSignaturesHydrated) return;
 
     const roleKey = currentRole;
     const previousSnapshot = oppoStatusSnapshotByRole.current[roleKey] || {};
@@ -3308,6 +3449,7 @@ export default function App() {
     }
 
     const incoming: NotificationItem[] = [];
+    const clearedForRole = new Set(clearedNotificationSignaturesByRole[roleKey] || []);
 
     oppoRequests.forEach((req) => {
       const prevStatus = previousSnapshot[req.id];
@@ -3316,6 +3458,8 @@ export default function App() {
       const changed = !!prevStatus && prevStatus !== req.status;
       if (!isNewForSnapshot && !changed) return;
       if (!isOppoRequestNotificationTarget(roleKey, req, user.id)) return;
+      const signature = buildOppoNotificationSignature(req, roleKey);
+      if (clearedForRole.has(signature)) return;
 
       const flowLabel = req.callType === 'SOLICITACAO_DISPOSITIVO' ? 'solicitação de material' : 'devolução de itens';
       const destination =
@@ -3343,7 +3487,7 @@ export default function App() {
       setNotifications((prev) => [...incoming, ...prev].slice(0, 120));
       if (roleKey === 'ALMOXERIFADO') playNotificationSound();
     }
-  }, [oppoRequests, currentRole, user, profile]);
+  }, [oppoRequests, currentRole, user, profile, clearedNotificationSignaturesByRole, notificationSignaturesHydrated]);
 
   const totalRequestPages = Math.max(1, Math.ceil(filteredRequests.length / REQUESTS_PER_PAGE));
   const currentRequestPage = Math.min(requestPage, totalRequestPages);
@@ -3431,12 +3575,7 @@ export default function App() {
               <option value="sunset">Sunset</option>
             </select>
             <button
-              onClick={() => {
-                setShowNotifications((prev) => !prev);
-                if (!showNotifications && unreadRoleNotifications > 0) {
-                  setNotifications((prev) => prev.map((n) => (n.role === currentRole ? { ...n, read: true } : n)));
-                }
-              }}
+              onClick={() => setShowNotifications((prev) => !prev)}
               className="relative inline-flex h-10 w-10 items-center justify-center rounded-xl border border-zinc-200 bg-white text-zinc-600 transition-all hover:-translate-y-0.5 hover:border-amber-300 hover:text-amber-700 hover:shadow-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-amber-700 dark:hover:text-amber-300"
               title="Notificações do setor"
             >
@@ -3470,14 +3609,14 @@ export default function App() {
                   </div>
                   <div className="mt-3 flex items-center gap-2">
                     <button
-                      onClick={() => setNotifications((prev) => prev.map((n) => (n.role === currentRole ? { ...n, read: true } : n)))}
+                      onClick={markCurrentRoleNotificationsAsRead}
                       className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-200 bg-white px-2.5 py-1 text-[11px] font-bold text-cyan-700 hover:bg-cyan-50 dark:border-cyan-700 dark:bg-zinc-900 dark:text-cyan-300"
                     >
                       <CheckCircle size={12} />
                       Marcar lidas
                     </button>
                     <button
-                      onClick={() => setNotifications((prev) => prev.filter((n) => n.role !== currentRole))}
+                      onClick={clearCurrentRoleNotifications}
                       className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-2.5 py-1 text-[11px] font-bold text-red-600 hover:bg-red-50 dark:border-red-700 dark:bg-zinc-900 dark:text-red-400"
                     >
                       <Trash2 size={12} />
@@ -3507,7 +3646,7 @@ export default function App() {
                           </div>
                           <div className="space-y-1 p-2">
                             {roleSetupNotifications.map((n) => (
-                              <div key={n.id} className="rounded-lg border border-zinc-100 bg-zinc-50 p-2 dark:border-zinc-800 dark:bg-zinc-800/50">
+                              <div key={n.id} className={`rounded-lg border p-2 ${n.read ? 'border-zinc-100 bg-zinc-50/70 opacity-80 dark:border-zinc-800 dark:bg-zinc-800/40' : 'border-cyan-200 bg-cyan-50/60 ring-1 ring-cyan-100 dark:border-cyan-800 dark:bg-cyan-900/20'}`}>
                                 <div className="flex items-start gap-2">
                                   <span className="mt-0.5 inline-flex h-6 w-6 items-center justify-center rounded-md bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300">
                                     <BarChart3 size={12} />
@@ -3515,6 +3654,7 @@ export default function App() {
                                   <div className="min-w-0 flex-1">
                                     <p className="text-xs font-semibold leading-snug text-zinc-800 dark:text-zinc-100">{n.message}</p>
                                     <div className="mt-1 flex items-center gap-2">
+                                      {!n.read && <span className="h-2 w-2 rounded-full bg-cyan-500" title="Não lida" />}
                                       <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${getNotificationStatusClass(n)}`}>
                                         {getNotificationStatusLabel(n)}
                                       </span>
@@ -3540,7 +3680,7 @@ export default function App() {
                           </div>
                           <div className="space-y-1 p-2">
                             {roleOppoAlmoxNotifications.map((n) => (
-                              <div key={n.id} className="rounded-lg border border-cyan-100 bg-cyan-50/40 p-2 dark:border-cyan-900 dark:bg-cyan-900/10">
+                              <div key={n.id} className={`rounded-lg border p-2 ${n.read ? 'border-cyan-100 bg-cyan-50/30 opacity-80 dark:border-cyan-900 dark:bg-cyan-900/10' : 'border-cyan-300 bg-cyan-50/70 ring-1 ring-cyan-100 dark:border-cyan-700 dark:bg-cyan-900/20'}`}>
                                 <div className="flex items-start gap-2">
                                   <span className="mt-0.5 inline-flex h-6 w-6 items-center justify-center rounded-md bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300">
                                     <Package size={12} />
@@ -3548,6 +3688,7 @@ export default function App() {
                                   <div className="min-w-0 flex-1">
                                     <p className="text-xs font-semibold leading-snug text-zinc-800 dark:text-zinc-100">{n.message}</p>
                                     <div className="mt-1 flex items-center gap-2">
+                                      {!n.read && <span className="h-2 w-2 rounded-full bg-cyan-500" title="Não lida" />}
                                       <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${getNotificationStatusClass(n)}`}>
                                         {getNotificationStatusLabel(n)}
                                       </span>
