@@ -209,6 +209,7 @@ interface NotificationItem {
 type NotificationSignatureMap = Partial<Record<UserRole, string[]>>;
 
 type InterfaceTheme = 'default' | 'ocean' | 'graphite' | 'sunset';
+const FIRST_ACCESS_ONBOARDING_VERSION = 'v1';
 
 type OppoCallType = 'SOLICITACAO_DISPOSITIVO' | 'DEVOLUCAO_DISPOSITIVO';
 type OppoRequestStatus = 'ABERTO' | 'SEPARACAO' | 'CONFERINDO' | 'FINALIZADO_ALMOXERIFADO' | 'CONCLUIDO' | 'DIVERGENCIA';
@@ -746,7 +747,10 @@ const ROLE_OPTIONS: { id: UserRole; label: string; icon: any; color: string }[] 
   { id: 'ALMOXERIFADO', label: 'Almoxerifado', icon: Package, color: 'bg-violet-100 text-violet-700' },
 ];
 
-const DEV_ADMIN_EMAILS = new Set(['victor.lopo@grupomultilaser.com.br']);
+const DEV_ADMIN_EMAILS = new Set([
+  'victor.lopo@grupomultilaser.com.br',
+  'devsistemasetup@gmail.com.br',
+]);
 const isDevAdminEmail = (email?: string) => !!email && DEV_ADMIN_EMAILS.has(email.trim().toLowerCase());
 const SETUP_CHECKLIST_URL = 'https://cheecklistt.netlify.app/';
 
@@ -1269,6 +1273,8 @@ export default function App() {
   const [showAlmoxPaidItemsModal, setShowAlmoxPaidItemsModal] = useState(false);
   const [showOppoRequesterConferenceModal, setShowOppoRequesterConferenceModal] = useState(false);
   const [showJobTitleModal, setShowJobTitleModal] = useState(false);
+  const [showFirstAccessOnboarding, setShowFirstAccessOnboarding] = useState(false);
+  const [firstAccessStepIndex, setFirstAccessStepIndex] = useState(0);
   const [jobTitleDraft, setJobTitleDraft] = useState('');
   const [quantityEditor, setQuantityEditor] = useState<QuantityEditorState>({
     open: false,
@@ -1334,6 +1340,72 @@ export default function App() {
   const bootstrappedRoleNotifications = useRef<Set<UserRole>>(new Set());
   const bootstrappedOppoRoleNotifications = useRef<Set<UserRole>>(new Set());
   const devRoleMenuRef = useRef<HTMLDivElement | null>(null);
+  const firstAccessOnboardingSteps = useMemo(
+    () => [
+      {
+        title: 'Visão Geral do Painel',
+        description: 'Aqui você acompanha os chamados, status por setor e indicadores em tempo real.',
+        icon: LayoutDashboard,
+        accentClass: 'from-cyan-50 to-blue-50 border-cyan-200',
+        iconClass: 'bg-cyan-100 text-cyan-700',
+        tips: [
+          'Use os cards do topo para ver pendentes, finalizados e tempo médio.',
+          'Selecione a linha para filtrar seus resultados mais rápido.',
+        ],
+      },
+      {
+        title: 'Abrir Novo Chamado',
+        description: 'Clique em Solicitar Novo Setup e preencha linha, produto e tipo para iniciar o fluxo.',
+        icon: PlusCircle,
+        accentClass: 'from-emerald-50 to-teal-50 border-emerald-200',
+        iconClass: 'bg-emerald-100 text-emerald-700',
+        tips: [
+          'Preencha dados corretamente para evitar retrabalho entre setores.',
+          'Cada chamado percorre as etapas até a conclusão final.',
+        ],
+      },
+      {
+        title: 'Fluxo por Setores',
+        description: 'Cada área recebe, executa e finaliza sua etapa com rastreabilidade completa.',
+        icon: Cog,
+        accentClass: 'from-amber-50 to-orange-50 border-amber-200',
+        iconClass: 'bg-amber-100 text-amber-700',
+        tips: [
+          'Setup, Teste, Processo, Automação e Almox seguem status separados.',
+          'No OPPO Setup, você controla postos, tempos e checklist por etapa.',
+        ],
+      },
+      {
+        title: 'Notificações do Setor',
+        description: 'As notificações são separadas por setor para não misturar informações.',
+        icon: Bell,
+        accentClass: 'from-violet-50 to-fuchsia-50 border-violet-200',
+        iconClass: 'bg-violet-100 text-violet-700',
+        tips: [
+          'Use Marcar lidas para organizar sua fila diária.',
+          'Use Limpar para remover histórico visual já tratado.',
+        ],
+      },
+      {
+        title: 'Histórico e Auditoria',
+        description: 'No histórico você revisa quem fez cada etapa, tempos e itens conferidos.',
+        icon: ShieldCheck,
+        accentClass: 'from-zinc-50 to-slate-100 border-zinc-200',
+        iconClass: 'bg-zinc-200 text-zinc-700',
+        tips: [
+          'Use busca por token, linha ou produto para localizar chamados.',
+          'Os dados ficam salvos no Supabase para não perder progresso.',
+        ],
+      },
+    ],
+    []
+  );
+  const firstAccessCurrentStep =
+    firstAccessOnboardingSteps[firstAccessStepIndex] || firstAccessOnboardingSteps[0];
+  const firstAccessProgress =
+    firstAccessOnboardingSteps.length > 0
+      ? Math.round(((firstAccessStepIndex + 1) / firstAccessOnboardingSteps.length) * 100)
+      : 0;
 
   useEffect(() => {
     const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
@@ -1559,6 +1631,20 @@ export default function App() {
     });
     setDevActiveRole(userRole);
   }, [user]);
+
+  useEffect(() => {
+    if (!user || !profile) {
+      setShowFirstAccessOnboarding(false);
+      setFirstAccessStepIndex(0);
+      return;
+    }
+    const onboardingVersion = `${user.user_metadata?.onboarding_setup_version || ''}`.trim().toLowerCase();
+    if (onboardingVersion !== FIRST_ACCESS_ONBOARDING_VERSION) {
+      setShowFirstAccessOnboarding(true);
+      return;
+    }
+    setShowFirstAccessOnboarding(false);
+  }, [profile?.uid, user?.id, user?.user_metadata?.onboarding_setup_version]);
 
   // Requests Listener
   useEffect(() => {
@@ -2397,6 +2483,39 @@ export default function App() {
     const currentTitle = `${user.user_metadata?.job_title || user.user_metadata?.cargo || ''}`.trim();
     setJobTitleDraft(currentTitle);
     setShowJobTitleModal(true);
+  };
+
+  const persistFirstAccessOnboardingAsSeen = async () => {
+    if (!isSupabaseConfigured || !user) return;
+    const currentVersion = `${user.user_metadata?.onboarding_setup_version || ''}`.trim().toLowerCase();
+    if (currentVersion === FIRST_ACCESS_ONBOARDING_VERSION) return;
+    const { data, error } = await supabase.auth.updateUser({
+      data: {
+        onboarding_setup_version: FIRST_ACCESS_ONBOARDING_VERSION,
+        onboarding_setup_seen_at: new Date().toISOString(),
+      },
+    });
+    if (error) {
+      console.error('Erro ao salvar onboarding de primeiro acesso:', error);
+      return;
+    }
+    if (data.user) {
+      setUser(data.user);
+    }
+  };
+
+  const closeFirstAccessOnboarding = async () => {
+    setShowFirstAccessOnboarding(false);
+    setFirstAccessStepIndex(0);
+    await persistFirstAccessOnboardingAsSeen();
+  };
+
+  const goToNextFirstAccessStep = async () => {
+    if (firstAccessStepIndex >= firstAccessOnboardingSteps.length - 1) {
+      await closeFirstAccessOnboarding();
+      return;
+    }
+    setFirstAccessStepIndex((prev) => Math.min(prev + 1, firstAccessOnboardingSteps.length - 1));
   };
 
   const saveJobTitleFromModal = async () => {
@@ -5076,6 +5195,79 @@ export default function App() {
 
       {/* Modal Form */}
       <AnimatePresence>
+        {showFirstAccessOnboarding && firstAccessCurrentStep && (
+          <div className="fixed inset-0 z-[65] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 16 }}
+              className="w-full max-w-2xl rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-700 dark:bg-zinc-900"
+            >
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-black uppercase tracking-wide text-cyan-700 dark:text-cyan-300">
+                    Primeiro acesso
+                  </p>
+                  <h3 className="mt-1 text-xl font-black text-zinc-900 dark:text-zinc-100">
+                    Guia rápido do sistema
+                  </h3>
+                  <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+                    Passo {firstAccessStepIndex + 1} de {firstAccessOnboardingSteps.length}
+                  </p>
+                </div>
+                <button
+                  onClick={closeFirstAccessOnboarding}
+                  className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-bold text-zinc-600 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                >
+                  Pular
+                </button>
+              </div>
+
+              <div className="mb-5 h-2 w-full rounded-full bg-zinc-200 dark:bg-zinc-700">
+                <div
+                  className="h-2 rounded-full bg-cyan-500 transition-all"
+                  style={{ width: `${firstAccessProgress}%` }}
+                />
+              </div>
+
+              <div className={`rounded-2xl border bg-gradient-to-r p-4 ${firstAccessCurrentStep.accentClass} dark:from-zinc-900 dark:to-zinc-900 dark:border-zinc-700`}>
+                <div className="flex items-start gap-3">
+                  <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${firstAccessCurrentStep.iconClass}`}>
+                    <firstAccessCurrentStep.icon size={18} />
+                  </span>
+                  <div className="min-w-0">
+                    <h4 className="text-lg font-black text-zinc-900 dark:text-zinc-100">{firstAccessCurrentStep.title}</h4>
+                    <p className="mt-1 text-sm text-zinc-700 dark:text-zinc-300">{firstAccessCurrentStep.description}</p>
+                  </div>
+                </div>
+                <div className="mt-4 space-y-2">
+                  {firstAccessCurrentStep.tips.map((tip, idx) => (
+                    <div key={`${firstAccessCurrentStep.title}-${idx}`} className="flex items-start gap-2 rounded-lg border border-zinc-200 bg-white/90 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-800/80">
+                      <CheckCircle2 size={14} className="mt-0.5 text-emerald-600 dark:text-emerald-400" />
+                      <p className="text-xs font-medium text-zinc-700 dark:text-zinc-200">{tip}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-5 flex items-center justify-between gap-2">
+                <button
+                  onClick={() => setFirstAccessStepIndex((prev) => Math.max(prev - 1, 0))}
+                  disabled={firstAccessStepIndex === 0}
+                  className="rounded-lg border border-zinc-300 px-3 py-2 text-xs font-bold text-zinc-600 disabled:cursor-not-allowed disabled:opacity-40 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                >
+                  Voltar
+                </button>
+                <button
+                  onClick={goToNextFirstAccessStep}
+                  className="rounded-lg bg-cyan-600 px-4 py-2 text-xs font-bold text-white hover:bg-cyan-700"
+                >
+                  {firstAccessStepIndex === firstAccessOnboardingSteps.length - 1 ? 'Concluir' : 'Próximo passo'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
         {showJobTitleModal && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
             <motion.div
