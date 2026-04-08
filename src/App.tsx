@@ -3658,7 +3658,7 @@ export default function App() {
               </p>
             </div>
           </div>
-          <div className="flex items-center justify-end gap-2 md:gap-3 relative">
+          <div className="relative flex w-full flex-wrap items-center justify-end gap-2 md:w-auto md:gap-3">
             <button
               onClick={() => setIsDarkMode((prev) => !prev)}
               className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-zinc-200 bg-white text-zinc-600 transition-all hover:-translate-y-0.5 hover:border-cyan-300 hover:text-cyan-700 hover:shadow-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-cyan-700 dark:hover:text-cyan-300"
@@ -3706,7 +3706,7 @@ export default function App() {
               )}
             </button>
             {showNotifications && (
-              <div className="absolute right-0 top-12 z-30 w-[390px] max-w-[92vw] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:bg-zinc-900 dark:border-zinc-700">
+              <div className="absolute right-0 top-12 z-30 w-[390px] max-w-[calc(100vw-1rem)] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900 sm:max-w-[92vw]">
                 <div className="border-b border-zinc-200 bg-gradient-to-r from-zinc-50 to-cyan-50 px-4 py-3 dark:border-zinc-700 dark:from-zinc-900 dark:to-zinc-800">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
@@ -3905,7 +3905,7 @@ export default function App() {
       </header>
 
       <main className="flex-1 max-w-7xl w-full mx-auto p-3 md:p-6">
-        <div className="flex items-start gap-4">
+        <div className="flex items-start gap-3 md:gap-4">
           <aside className="sticky top-20 hidden md:flex flex-col gap-2 rounded-2xl border border-zinc-200 bg-white p-2 shadow-sm">
             <button
               type="button"
@@ -3950,25 +3950,25 @@ export default function App() {
           </aside>
 
           <section className="flex-1">
-        <div className="mb-4 flex flex-wrap gap-1 md:hidden rounded-xl border border-zinc-200 bg-white p-1">
+        <div className="mb-4 flex gap-1 overflow-x-auto whitespace-nowrap rounded-xl border border-zinc-200 bg-white p-1 md:hidden">
           <button
             type="button"
             onClick={() => setActiveMainTab('OPERACAO')}
-            className={`rounded-lg px-3 py-2 text-xs font-bold transition-all ${activeMainTab === 'OPERACAO' ? 'bg-emerald-500 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
+            className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold transition-all ${activeMainTab === 'OPERACAO' ? 'bg-emerald-500 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
           >
             Operação
           </button>
           <button
             type="button"
             onClick={() => setActiveMainTab('SLA')}
-            className={`rounded-lg px-3 py-2 text-xs font-bold transition-all ${activeMainTab === 'SLA' ? 'bg-cyan-600 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
+            className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold transition-all ${activeMainTab === 'SLA' ? 'bg-cyan-600 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
           >
             SLA
           </button>
           <button
             type="button"
             onClick={() => setActiveMainTab('OPPO')}
-            className={`rounded-lg px-3 py-2 text-xs font-bold transition-all ${activeMainTab === 'OPPO' ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
+            className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold transition-all ${activeMainTab === 'OPPO' ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
           >
             <span className="inline-flex items-center gap-2">
               <img src="/oppo-logo.svg" alt="OPPO" className="h-3.5 w-7 rounded-sm object-cover" />
@@ -3978,7 +3978,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveMainTab('OPPO_SETUP')}
-            className={`rounded-lg px-3 py-2 text-xs font-bold transition-all ${activeMainTab === 'OPPO_SETUP' ? 'bg-emerald-600 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
+            className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold transition-all ${activeMainTab === 'OPPO_SETUP' ? 'bg-emerald-600 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
           >
             <span className="inline-flex items-center gap-2">
               <img src="/oppo-setup-logo.svg" alt="Oppo Setup" className="h-3.5 w-7 rounded-sm object-cover" />
@@ -3988,7 +3988,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveMainTab('ALMOXERIFADO')}
-            className={`rounded-lg px-3 py-2 text-xs font-bold transition-all ${activeMainTab === 'ALMOXERIFADO' ? 'bg-violet-600 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
+            className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold transition-all ${activeMainTab === 'ALMOXERIFADO' ? 'bg-violet-600 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
           >
             Almox
           </button>
@@ -5269,7 +5269,7 @@ export default function App() {
           </div>
         )}
         {showJobTitleModal && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto p-4 sm:items-center bg-black/60 backdrop-blur-sm">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -5328,7 +5328,7 @@ export default function App() {
           </div>
         )}
         {showForm && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:items-center bg-black/50 backdrop-blur-sm">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -5404,12 +5404,12 @@ export default function App() {
           </div>
         )}
         {showOppoSetupStartModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:items-center bg-black/50 backdrop-blur-sm">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl"
+              className="my-6 w-full max-w-lg max-h-[92vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl sm:my-0"
             >
               <div className="mb-4 flex items-center justify-between">
                 <h3 className="text-lg font-bold text-zinc-900">Iniciar Setup - OPPO</h3>
@@ -5639,7 +5639,7 @@ export default function App() {
           </div>
         )}
         {showOppoSetupLayoutsListModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:items-center bg-black/50 backdrop-blur-sm">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -5701,7 +5701,7 @@ export default function App() {
           </div>
         )}
         {showOppoSetupLayoutModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:items-center bg-black/50 backdrop-blur-sm">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -6007,12 +6007,12 @@ export default function App() {
           </div>
         )}
         {showOppoPressChecklistModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:items-center bg-black/50 backdrop-blur-sm">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl"
+              className="my-6 w-full max-w-md max-h-[92vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl sm:my-0"
             >
               <div className="mb-4 flex items-center justify-between">
                 <h3 className="text-lg font-bold text-zinc-900">Checklist - Recursos do Posto</h3>
@@ -6130,7 +6130,7 @@ export default function App() {
           </div>
         )}
         {quantityEditor.open && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto p-4 sm:items-center bg-black/60 backdrop-blur-sm">
             <motion.div
               initial={{ opacity: 0, scale: 0.96, y: 16 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -6208,12 +6208,12 @@ export default function App() {
           </div>
         )}
         {showOppoCallTypeModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:items-center bg-black/50 backdrop-blur-sm">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl"
+              className="my-6 w-full max-w-lg max-h-[92vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl sm:my-0"
             >
               <div className="mb-4 flex items-center justify-between">
                 <h3 className="text-lg font-bold text-zinc-900">Abertura de Chamado OPPO</h3>
@@ -6327,12 +6327,12 @@ export default function App() {
           </div>
         )}
         {showOppoReturnInfoModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:items-center bg-black/50 backdrop-blur-sm">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl"
+              className="my-6 w-full max-w-lg max-h-[92vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl sm:my-0"
             >
               <div className="mb-4 flex items-center justify-between">
                 <h3 className="text-lg font-bold text-zinc-900">Devolução para Almoxerifado</h3>
@@ -6487,12 +6487,12 @@ export default function App() {
           </div>
         )}
         {showAlmoxPaidItemsModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:items-center bg-black/50 backdrop-blur-sm">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl"
+              className="my-6 w-full max-w-lg max-h-[92vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl sm:my-0"
             >
               <div className="mb-4 flex items-center justify-between">
                 <h3 className="text-lg font-bold text-zinc-900">Itens Pagos pelo Almoxerifado</h3>
@@ -6628,7 +6628,7 @@ export default function App() {
           </div>
         )}
         {showOppoRequesterConferenceModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:items-center bg-black/50 backdrop-blur-sm">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -7744,12 +7744,12 @@ function RequestCard({ request, role, isDevAdmin, onUpdateStatus, onChecklistCom
 
       <AnimatePresence>
         {showTesteChecklist && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 sm:items-center">
             <motion.div
               initial={{ opacity: 0, scale: 0.96 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.96 }}
-              className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl"
+              className="my-6 w-full max-w-md max-h-[92vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl sm:my-0"
             >
               <h4 className="text-lg font-bold text-zinc-900 mb-2">Checklist da Engenharia de Teste</h4>
               <p className="text-xs text-zinc-500 mb-4">Marque os itens concluídos para liberar a finalização.</p>
@@ -7794,12 +7794,12 @@ function RequestCard({ request, role, isDevAdmin, onUpdateStatus, onChecklistCom
           </div>
         )}
         {showProcessoChecklist && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 sm:items-center">
             <motion.div
               initial={{ opacity: 0, scale: 0.96 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.96 }}
-              className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl"
+              className="my-6 w-full max-w-md max-h-[92vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl sm:my-0"
             >
               <h4 className="text-lg font-bold text-zinc-900 mb-2">Checklist da Engenharia de Processo</h4>
               <p className="text-xs text-zinc-500 mb-4">Marque os postos validados e confirme a mudança de versão.</p>
@@ -7874,12 +7874,12 @@ function RequestCard({ request, role, isDevAdmin, onUpdateStatus, onChecklistCom
           </div>
         )}
         {showAutomacaoChecklist && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 sm:items-center">
             <motion.div
               initial={{ opacity: 0, scale: 0.96 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.96 }}
-              className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl"
+              className="my-6 w-full max-w-md max-h-[92vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl sm:my-0"
             >
               <h4 className="text-lg font-bold text-zinc-900 mb-2">Checklist da Engenharia de Automação</h4>
               <p className="text-xs text-zinc-500 mb-4">Marque o posto validado e informe se o sistema SYNC foi validado.</p>
@@ -7943,12 +7943,12 @@ function RequestCard({ request, role, isDevAdmin, onUpdateStatus, onChecklistCom
           </div>
         )}
         {showReceiverModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 sm:items-center">
             <motion.div
               initial={{ opacity: 0, scale: 0.96 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.96 }}
-              className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl"
+              className="my-6 w-full max-w-md max-h-[92vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl sm:my-0"
             >
               <h4 className="text-lg font-bold text-zinc-900 mb-2">
                 {receiverTargetRole === 'AREA_KIT' ? 'Confirmação da Área Kit' : 'Confirmação da Qualidade'}
