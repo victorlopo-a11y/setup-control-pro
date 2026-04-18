@@ -28,3 +28,25 @@ View your app in AI Studio: https://ai.studio/apps/88cae728-7ea5-4ec0-8cc3-3b8a1
 7. (Optional) Set `GEMINI_API_KEY` in `.env.local` if using Gemini features
 8. Run the app:
    `npm run dev`
+
+## Supabase Keepalive (anti-pausa por inatividade)
+
+Para manter o banco ativo mesmo sem ninguém abrir o sistema, este projeto inclui:
+
+- SQL: `supabase-keepalive.sql` (cria a função `public.keepalive_ping()`)
+- Script: `scripts/supabase-keepalive.mjs`
+- Agendamento: `.github/workflows/supabase-keepalive.yml` (a cada 12 horas)
+
+### Como ativar
+
+1. Rode o SQL do arquivo `supabase-keepalive.sql` no SQL Editor da Supabase (uma única vez).
+2. No GitHub do repositório, configure os Secrets:
+   - `KEEPALIVE_SUPABASE_URL` = URL do projeto Supabase (`https://...supabase.co`)
+   - `KEEPALIVE_SUPABASE_SERVICE_ROLE_KEY` = Service Role Key da Supabase
+3. O workflow `Supabase Keepalive` vai executar automaticamente no cron ou manualmente em `workflow_dispatch`.
+
+### Teste local (opcional)
+
+Com variáveis de ambiente definidas:
+
+`npm run keepalive:ping`
