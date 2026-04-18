@@ -13,6 +13,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+      - name: Validate secrets presence
+        run: |
+          echo "KEEPALIVE_SUPABASE_URL set: ${{ secrets.KEEPALIVE_SUPABASE_URL != '' }}"
+          echo "KEEPALIVE_SUPABASE_SERVICE_ROLE_KEY set: ${{ secrets.KEEPALIVE_SUPABASE_SERVICE_ROLE_KEY != '' }}"
       - name: Ping Supabase
         run: node scripts/supabase-keepalive.mjs
         env:
