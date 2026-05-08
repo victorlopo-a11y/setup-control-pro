@@ -41,7 +41,16 @@ import { ptBR } from 'date-fns/locale';
 import { isSupabaseConfigured, supabase, supabaseConfigError } from './supabase';
 
 // Types
-type UserRole = 'PRODUCAO' | 'QUALIDADE' | 'AREA_KIT' | 'ENGENHARIA_SETUP' | 'ENGENHARIA_TESTE' | 'ENGENHARIA_AUTOMACAO' | 'ENGENHARIA_PROCESSO' | 'ALMOXERIFADO';
+type UserRole =
+  | 'PRODUCAO'
+  | 'QUALIDADE'
+  | 'AREA_KIT'
+  | 'PCP'
+  | 'ENGENHARIA_SETUP'
+  | 'ENGENHARIA_TESTE'
+  | 'ENGENHARIA_AUTOMACAO'
+  | 'ENGENHARIA_PROCESSO'
+  | 'ALMOXERIFADO';
 
 interface UserProfile {
   uid: string;
@@ -214,6 +223,7 @@ const FIRST_ACCESS_ONBOARDING_VERSION = 'v1';
 type OppoCallType = 'SOLICITACAO_DISPOSITIVO' | 'DEVOLUCAO_DISPOSITIVO';
 type OppoRequestStatus = 'ABERTO' | 'SEPARACAO' | 'CONFERINDO' | 'FINALIZADO_ALMOXERIFADO' | 'CONCLUIDO' | 'DIVERGENCIA';
 type OppoLineType = 'MONTAGEM/TESTE' | 'EMBALAGEM';
+type OppoSetupSolicitationStatus = 'PENDING_PROCESSO' | 'ACCEPTED' | 'CANCELLED';
 interface OppoPaidItem {
   code: string;
   quantity: number;
@@ -249,6 +259,43 @@ interface OppoSetupStartDraft {
   product: string;
   lineType: OppoLineType;
   sessionId: string;
+  productionOrder?: string;
+}
+
+interface OppoSetupSolicitation {
+  id: string;
+  line: string;
+  product: string;
+  lineType: OppoLineType;
+  productionOrder?: string;
+  status: OppoSetupSolicitationStatus;
+  sessionId: string;
+  createdBy: string;
+  createdByName?: string;
+  createdAt: string;
+  acceptedBy?: string;
+  acceptedByName?: string;
+  acceptedAt?: string;
+  finishedAt?: string;
+  cancelledAt?: string;
+}
+
+interface OppoSetupSolicitationRow {
+  id: string;
+  line: string | null;
+  product: string | null;
+  line_type: OppoLineType | null;
+  production_order: string | null;
+  status: OppoSetupSolicitationStatus | null;
+  session_id: string | null;
+  created_by: string | null;
+  created_by_name: string | null;
+  created_at: string | null;
+  accepted_by: string | null;
+  accepted_by_name: string | null;
+  accepted_at: string | null;
+  finished_at: string | null;
+  cancelled_at: string | null;
 }
 
 interface OppoPressChecklistDraft {
@@ -366,6 +413,33 @@ const mapOppoRequest = (row: OppoRequestRow): OppoRequest => {
     paidItems: parseOppoPaidItems(row.paid_items_selected),
     paidItemsNote: row.paid_items_note || undefined,
     notes: rawNotes.replace(OPPO_LEGACY_CONFERINDO_TAG, '').trim() || undefined,
+  };
+};
+
+const mapOppoSetupSolicitation = (row: OppoSetupSolicitationRow): OppoSetupSolicitation => {
+  const status: OppoSetupSolicitationStatus =
+    row.status === 'ACCEPTED' || row.status === 'CANCELLED' || row.status === 'PENDING_PROCESSO'
+      ? row.status
+      : 'PENDING_PROCESSO';
+
+  const lineType: OppoLineType = row.line_type === 'EMBALAGEM' ? 'EMBALAGEM' : 'MONTAGEM/TESTE';
+
+  return {
+    id: row.id,
+    line: row.line || '',
+    product: row.product || '',
+    lineType,
+    productionOrder: row.production_order || undefined,
+    status,
+    sessionId: row.session_id || '',
+    createdBy: row.created_by || 'SEM_USUARIO',
+    createdByName: row.created_by_name || undefined,
+    createdAt: row.created_at || new Date().toISOString(),
+    acceptedBy: row.accepted_by || undefined,
+    acceptedByName: row.accepted_by_name || undefined,
+    acceptedAt: row.accepted_at || undefined,
+    finishedAt: row.finished_at || undefined,
+    cancelledAt: row.cancelled_at || undefined,
   };
 };
 
@@ -541,6 +615,7 @@ const OPPO_IDENTIFICATION_CODES = Array.from(
 
 const OPPO_SETUP_SESSION_TAG_PREFIX = '[SETUP_SESSION:';
 const OPPO_SETUP_POST_TAG_PREFIX = '[SETUP_POST:';
+const OPPO_SETUP_PRODUCTION_ORDER_TAG_PREFIX = '[SETUP_OP:';
 const OPPO_SETUP_SESSION_COMPLETED_TAG = '[SETUP_SESSION_COMPLETED]';
 const OPPO_PRESS_CHECKLIST_TAG_PREFIX = '[PRESS_CHECKLIST:';
 const DEFAULT_OPPO_SETUP_POSTS = [
@@ -557,6 +632,16 @@ const extractTaggedValue = (notes: string | undefined, prefix: string): string =
   const end = notes.indexOf(']', start);
   if (end < 0) return '';
   return notes.slice(start, end).trim();
+};
+
+const extractOppoProductionOrder = (notes?: string): string => {
+  if (!notes) return '';
+  const tagged = extractTaggedValue(notes, OPPO_SETUP_PRODUCTION_ORDER_TAG_PREFIX);
+  if (tagged) return tagged;
+
+  // Compat: notas antigas salvavam como "OP: XXXX."
+  const match = notes.match(/\bOP:\s*([^\.\]\n\r]+)\.?/i);
+  return (match?.[1] || '').trim();
 };
 
 const buildOppoPressChecklistTag = (draft: OppoPressChecklistDraft) =>
@@ -740,6 +825,7 @@ const ROLE_OPTIONS: { id: UserRole; label: string; icon: any; color: string }[] 
   { id: 'PRODUCAO', label: 'Produção', icon: LayoutDashboard, color: 'bg-sky-100 text-sky-700' },
   { id: 'QUALIDADE', label: 'Qualidade', icon: ShieldCheck, color: 'bg-amber-100 text-amber-700' },
   { id: 'AREA_KIT', label: 'Área Kit', icon: CheckCircle2, color: 'bg-orange-100 text-orange-700' },
+  { id: 'PCP', label: 'PCP', icon: BarChart3, color: 'bg-blue-100 text-blue-700' },
   { id: 'ENGENHARIA_SETUP', label: 'Engenharia (Setup)', icon: Settings, color: 'bg-emerald-100 text-emerald-700' },
   { id: 'ENGENHARIA_TESTE', label: 'Engenharia (Teste)', icon: ClipboardCheck, color: 'bg-indigo-100 text-indigo-700' },
   { id: 'ENGENHARIA_AUTOMACAO', label: 'Engenharia (Automação)', icon: Cpu, color: 'bg-cyan-100 text-cyan-700' },
@@ -1299,7 +1385,9 @@ export default function App() {
   const [oppoSetupLineDraft, setOppoSetupLineDraft] = useState('');
   const [oppoSetupProductDraft, setOppoSetupProductDraft] = useState('');
   const [oppoSetupTypeDraft, setOppoSetupTypeDraft] = useState<OppoLineType | ''>('');
+  const [oppoSetupProductionOrderDraft, setOppoSetupProductionOrderDraft] = useState('');
   const [oppoSetupStartDraft, setOppoSetupStartDraft] = useState<OppoSetupStartDraft | null>(null);
+  const [oppoSetupSolicitations, setOppoSetupSolicitations] = useState<OppoSetupSolicitation[]>([]);
   const [oppoSetupCompletedSessionIds, setOppoSetupCompletedSessionIds] = useState<string[]>([]);
   const [oppoSetupMinimizedSessions, setOppoSetupMinimizedSessions] = useState<OppoSetupStartDraft[]>([]);
   const [oppoSetupNowMs, setOppoSetupNowMs] = useState(() => Date.now());
@@ -1741,6 +1829,43 @@ export default function App() {
     };
   }, [user, profile]);
 
+  // OPPO Setup Solicitações (PCP -> Eng. Processo)
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    if (!user || !profile) return;
+
+    const loadOppoSetupSolicitations = async () => {
+      const { data, error } = await supabase
+        .from('oppo_setup_requests')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('OPPO setup solicitations load error:', error);
+        return;
+      }
+
+      setOppoSetupSolicitations((data || []).map((row) => mapOppoSetupSolicitation(row as OppoSetupSolicitationRow)));
+    };
+
+    loadOppoSetupSolicitations();
+
+    const channel = supabase
+      .channel('oppo_setup_requests_changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'oppo_setup_requests' },
+        () => {
+          loadOppoSetupSolicitations();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user, profile]);
+
   const handleCreateOppoRequest = async (
     type: OppoCallType,
     extra: {
@@ -1752,19 +1877,29 @@ export default function App() {
       notes?: string;
       initialStatus?: OppoRequestStatus;
     } = {}
-  ) => {
-    if (!user || !profile) return;
+  ): Promise<OppoRequest | null> => {
+    if (!user || !profile) return null;
     const isSetupGenerated = `${extra.notes || ''}`.includes(OPPO_SETUP_SESSION_TAG_PREFIX);
     const canReuseExistingRequest = type === 'SOLICITACAO_DISPOSITIVO' && !isSetupGenerated;
 
     if (canReuseExistingRequest) {
-      const { data: openRequests, error: openRequestsError } = await supabase
-        .from('oppo_requests')
-        .select('*')
-        .eq('created_by', user.id)
-        .eq('call_type', type)
-        .in('status', ['ABERTO', 'SEPARACAO', 'CONFERINDO', 'FINALIZADO_ALMOXERIFADO', 'DIVERGENCIA'])
-        .order('requested_at', { ascending: false });
+      let openRequests: any[] | null = null;
+      let openRequestsError: any = null;
+      try {
+        const resp = await supabase
+          .from('oppo_requests')
+          .select('*')
+          .eq('created_by', user.id)
+          .eq('call_type', type)
+          .in('status', ['ABERTO', 'SEPARACAO', 'CONFERINDO', 'FINALIZADO_ALMOXERIFADO', 'DIVERGENCIA'])
+          .order('requested_at', { ascending: false });
+        openRequests = resp.data as any[] | null;
+        openRequestsError = resp.error;
+      } catch (err) {
+        console.error('Lookup OPPO open requests threw:', err);
+        window.alert('Erro ao consultar chamados OPPO (falha de rede). Tente novamente.');
+        return null;
+      }
 
       if (openRequestsError) {
         console.error('Lookup OPPO open requests error:', openRequestsError);
@@ -1787,7 +1922,7 @@ export default function App() {
           setOppoRequests((prev) => [mapped, ...prev.filter((req) => req.id !== mapped.id)]);
           setOppoCallType(type);
           window.alert('Já existe uma solicitação em andamento para esta linha/produto. O sistema manteve o mesmo chamado para seguir a 2ª conferência.');
-          return;
+          return mapped;
         }
       }
     }
@@ -1810,39 +1945,203 @@ export default function App() {
       notes: extra.notes || null,
     };
 
-    let { data, error } = await supabase
-      .from('oppo_requests')
-      .insert(insertWithReturnFields)
-      .select('*')
-      .single();
+    let data: any = null;
+    let error: any = null;
+    try {
+      const resp = await supabase
+        .from('oppo_requests')
+        .insert(insertWithReturnFields)
+        .select('*')
+        .single();
+      data = resp.data;
+      error = resp.error;
+    } catch (err) {
+      console.error('Create OPPO request threw:', err);
+      window.alert('Erro ao abrir chamado OPPO (falha de rede). Tente novamente.');
+      return null;
+    }
 
     // Fallback para ambientes onde a migração ainda não criou as novas colunas.
     if (error && (`${error.message}`.includes('return_items_') || `${error.message}`.includes('line_type') || `${error.message}`.includes("column 'line'") || `${error.message}`.includes("column 'product'"))) {
-      const fallbackResult = await supabase
-        .from('oppo_requests')
-        .insert({
-          call_type: type,
-          status: 'ABERTO',
-          created_by: user.id,
-          created_by_name: profile.displayName || user.user_metadata?.full_name || user.user_metadata?.name || (user.email ? user.email.split('@')[0] : 'Usuario'),
-          requested_at: new Date().toISOString(),
-        })
-        .select('*')
-        .single();
-      data = fallbackResult.data;
-      error = fallbackResult.error;
+      try {
+        const fallbackResult = await supabase
+          .from('oppo_requests')
+          .insert({
+            call_type: type,
+            status: 'ABERTO',
+            created_by: user.id,
+            created_by_name: profile.displayName || user.user_metadata?.full_name || user.user_metadata?.name || (user.email ? user.email.split('@')[0] : 'Usuario'),
+            requested_at: new Date().toISOString(),
+          })
+          .select('*')
+          .single();
+        data = fallbackResult.data;
+        error = fallbackResult.error;
+      } catch (err) {
+        console.error('Create OPPO request fallback threw:', err);
+        window.alert('Erro ao abrir chamado OPPO (falha de rede). Tente novamente.');
+        return null;
+      }
     }
 
     if (error) {
       console.error('Create OPPO request error:', error);
-      window.alert(`Erro ao abrir chamado OPPO: ${error.message}`);
-      return;
+      const extraInfo = [error.details, error.hint, error.code].filter(Boolean).join(' | ');
+      window.alert(`Erro ao abrir chamado OPPO: ${error.message}${extraInfo ? ` (${extraInfo})` : ''}`);
+      return null;
     }
 
     if (data) {
       const mapped = mapOppoRequest(data as OppoRequestRow);
       setOppoRequests((prev) => [mapped, ...prev]);
       setOppoCallType(type);
+      console.info('[OPPO] Chamado criado:', {
+        id: mapped.id,
+        callType: mapped.callType,
+        status: mapped.status,
+        line: mapped.line,
+        product: mapped.product,
+        lineType: mapped.lineType,
+        createdBy: mapped.createdBy,
+        hasSetupSession: !!extractTaggedValue(mapped.notes, OPPO_SETUP_SESSION_TAG_PREFIX),
+      });
+      return mapped;
+    }
+    return null;
+  };
+
+  const handleCreateOppoSetupSolicitation = async (payload: {
+    line: string;
+    product: string;
+    lineType: OppoLineType;
+    productionOrder: string;
+  }) => {
+    if (!user || !profile) return;
+
+    const sessionId = `S${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+    const now = new Date().toISOString();
+
+    const { data, error } = await supabase
+      .from('oppo_setup_requests')
+      .insert({
+        line: payload.line,
+        product: payload.product,
+        line_type: payload.lineType,
+        production_order: payload.productionOrder,
+        status: 'PENDING_PROCESSO',
+        session_id: sessionId,
+        created_by: user.id,
+        created_by_name: profile.displayName || user.user_metadata?.full_name || user.user_metadata?.name || (user.email ? user.email.split('@')[0] : 'Usuario'),
+        created_at: now,
+      })
+      .select('*')
+      .single();
+
+    if (error) {
+      console.error('Create OPPO setup solicitation error:', error);
+      const extraInfo = [error.details, error.hint, error.code].filter(Boolean).join(' | ');
+      window.alert(`Erro ao abrir solicitação de setup: ${error.message}${extraInfo ? ` (${extraInfo})` : ''}`);
+      return;
+    }
+
+    if (data) {
+      const mapped = mapOppoSetupSolicitation(data as OppoSetupSolicitationRow);
+      setOppoSetupSolicitations((prev) => [mapped, ...prev]);
+
+      // Ao criar a solicitação do PCP para Eng. de Processo, também abre automaticamente
+      // um chamado para o Almoxerifado iniciar separação/conferência de materiais.
+      try {
+        // Se existir automação no banco (trigger), o chamado já vai estar criado.
+        const { data: existing, error: existingError } = await supabase
+          .from('oppo_requests')
+          .select('id, notes')
+          .eq('call_type', 'SOLICITACAO_DISPOSITIVO')
+          .like('notes', `${OPPO_SETUP_SESSION_TAG_PREFIX}${sessionId}]%`)
+          .order('requested_at', { ascending: false })
+          .limit(1);
+
+        if (existingError) {
+          console.error('Erro ao checar chamado automático do Almox (OPPO):', existingError);
+        }
+
+        const alreadyCreated = Array.isArray(existing) && existing.length > 0;
+        if (!alreadyCreated) {
+          const createdAlmoxRequest = await handleCreateOppoRequest('SOLICITACAO_DISPOSITIVO', {
+            line: payload.line,
+            product: payload.product,
+            lineType: payload.lineType,
+            notes: `${OPPO_SETUP_SESSION_TAG_PREFIX}${sessionId}] ${OPPO_SETUP_PRODUCTION_ORDER_TAG_PREFIX}${payload.productionOrder}] Solicitação automática de materiais para setup.`,
+            initialStatus: 'ABERTO',
+          });
+          if (!createdAlmoxRequest) {
+            window.alert('A solicitação de setup foi criada, mas falhou ao abrir o chamado automático do Almox. Veja o console para detalhes.');
+          }
+        }
+      } catch (err) {
+        console.error('Falha ao criar chamado automático do Almox (OPPO):', err);
+        window.alert('A solicitação de setup foi criada, mas falhou ao abrir o chamado automático do Almox (falha inesperada).');
+      }
+    }
+  };
+
+  const handleAcceptOppoSetupSolicitation = async (solicitation: OppoSetupSolicitation) => {
+    if (!user || !profile) return;
+    const now = new Date().toISOString();
+    const { data, error } = await supabase
+      .from('oppo_setup_requests')
+      .update({
+        status: 'ACCEPTED',
+        accepted_by: user.id,
+        accepted_by_name: profile.displayName || user.user_metadata?.full_name || user.user_metadata?.name || (user.email ? user.email.split('@')[0] : 'Usuario'),
+        accepted_at: now,
+      })
+      .eq('id', solicitation.id)
+      .select('*')
+      .single();
+
+    if (error) {
+      console.error('Accept OPPO setup solicitation error:', error);
+      window.alert(`Erro ao aceitar solicitação: ${error.message}`);
+      return;
+    }
+
+    if (data) {
+      const mapped = mapOppoSetupSolicitation(data as OppoSetupSolicitationRow);
+      setOppoSetupSolicitations((prev) => prev.map((item) => (item.id === mapped.id ? mapped : item)));
+
+      setOppoSetupStartDraft({
+        line: mapped.line,
+        product: mapped.product,
+        lineType: mapped.lineType,
+        sessionId: mapped.sessionId,
+        productionOrder: mapped.productionOrder,
+      });
+      setShowOppoSetupPostsModal(true);
+    }
+  };
+
+  const handleCancelOppoSetupSolicitation = async (solicitation: OppoSetupSolicitation) => {
+    if (!user) return;
+    const now = new Date().toISOString();
+    const { data, error } = await supabase
+      .from('oppo_setup_requests')
+      .update({
+        status: 'CANCELLED',
+        cancelled_at: now,
+      })
+      .eq('id', solicitation.id)
+      .select('*')
+      .single();
+
+    if (error) {
+      console.error('Cancel OPPO setup solicitation error:', error);
+      window.alert(`Erro ao cancelar solicitação: ${error.message}`);
+      return;
+    }
+
+    if (data) {
+      const mapped = mapOppoSetupSolicitation(data as OppoSetupSolicitationRow);
+      setOppoSetupSolicitations((prev) => prev.map((item) => (item.id === mapped.id ? mapped : item)));
     }
   };
 
@@ -2054,6 +2353,10 @@ export default function App() {
   };
 
   const addPostToOppoSetupLayoutDraft = () => {
+    if (!canManageOppoSetupLayouts) {
+      window.alert('Somente a Eng. de Processo pode alterar layouts.');
+      return;
+    }
     const code = oppoSetupLayoutNewPostCode.trim().toUpperCase();
     if (!code) {
       window.alert('Informe o código do posto.');
@@ -2083,10 +2386,18 @@ export default function App() {
   };
 
   const removePostFromOppoSetupLayoutDraft = (index: number) => {
+    if (!canManageOppoSetupLayouts) {
+      window.alert('Somente a Eng. de Processo pode alterar layouts.');
+      return;
+    }
     setOppoSetupLayoutPostsDraft((prev) => prev.filter((_item, idx) => idx !== index).map((item, idx) => ({ ...item, order: idx })));
   };
 
   const saveOppoSetupLayoutDraft = async () => {
+    if (!canManageOppoSetupLayouts) {
+      window.alert('Usuários do PCP não podem salvar/alterar layouts. Apenas visualização.');
+      return;
+    }
     const productKey = normalizeOppoSetupProductKey(oppoSetupLayoutProductDraft);
     if (!productKey) {
       window.alert('Informe o produto para salvar o layout.');
@@ -2141,6 +2452,10 @@ export default function App() {
   };
 
   const removeOppoSetupLayoutDraft = async () => {
+    if (!canManageOppoSetupLayouts) {
+      window.alert('Usuários do PCP não podem excluir layouts. Apenas visualização.');
+      return;
+    }
     const productKey = normalizeOppoSetupProductKey(oppoSetupLayoutProductDraft);
     if (!productKey) return;
     if (!window.confirm(`Excluir o layout personalizado do produto ${productKey}?`)) return;
@@ -2174,6 +2489,7 @@ export default function App() {
   };
 
   const renderOppoSetupPostCard = (post: string) => {
+    const canActOnSetupPosts = isDevAdmin || currentRole === 'ENGENHARIA_PROCESSO';
     const templateItem = activeOppoSetupTemplate.find((item) => item.code === post);
     const stepDescription = templateItem?.description || `Execução do posto ${post}`;
     const postRequest = oppoSetupSessionRequests.find((req) => extractTaggedValue(req.notes, OPPO_SETUP_POST_TAG_PREFIX) === post);
@@ -2270,10 +2586,14 @@ export default function App() {
           </div>
         )}
         <div className="mt-2 flex flex-wrap gap-1">
-          {!postRequest && (
+          {!postRequest && canActOnSetupPosts && (
             <button
               type="button"
               onClick={async () => {
+                if (!canActOnSetupPosts) {
+                  window.alert('Apenas a Eng. de Processo pode iniciar os postos do setup.');
+                  return;
+                }
                 if (!oppoSetupStartDraft) return;
                 await handleCreateOppoRequest('SOLICITACAO_DISPOSITIVO', {
                   line: oppoSetupStartDraft.line,
@@ -2289,10 +2609,14 @@ export default function App() {
               Iniciar
             </button>
           )}
-          {isRunning && (isDevAdmin || postRequest?.createdBy === user?.id) && (
+          {isRunning && canActOnSetupPosts && (isDevAdmin || postRequest?.createdBy === user?.id) && (
             <button
               type="button"
               onClick={() => {
+                if (!canActOnSetupPosts) {
+                  window.alert('Apenas a Eng. de Processo pode finalizar os postos do setup.');
+                  return;
+                }
                 if (!postRequest) return;
                 const sessionId = oppoSetupStartDraft?.sessionId || extractTaggedValue(postRequest.notes, OPPO_SETUP_SESSION_TAG_PREFIX);
                 if (hasSpecialChecklist) {
@@ -2335,7 +2659,7 @@ export default function App() {
 
   const handleUpdateOppoStatus = async (requestId: string, nextStatus: OppoRequestStatus, patch: Record<string, any> = {}) => {
     const sanitizedNotes = `${patch.notes || ''}`.replace(OPPO_LEGACY_CONFERINDO_TAG, '').trim();
-    const basePatch = {
+    const basePatch: Record<string, any> = {
       ...patch,
       ...(Object.prototype.hasOwnProperty.call(patch, 'notes') ? { notes: sanitizedNotes || null } : {}),
     };
@@ -3003,10 +3327,39 @@ export default function App() {
   const canSeeTesteChecklistHub = currentRole === 'ENGENHARIA_TESTE';
   const effectiveDashboardView = canSeeTesteChecklistHub ? dashboardView : 'REQUESTS';
   const canActAsAlmox = currentRole === 'ALMOXERIFADO' || isDevAdmin;
-  const oppoRequesterVisibleRequests = useMemo(
-    () => oppoRequests.filter((req) => isDevAdmin || req.createdBy === user?.id),
-    [isDevAdmin, oppoRequests, user?.id]
-  );
+  const canManageOppoSetupLayouts = isDevAdmin || currentRole === 'ENGENHARIA_PROCESSO';
+  const canNavigateNonSetupTabs = isDevAdmin || currentRole !== 'PCP';
+  const allowedMainTabs = useMemo(() => {
+    if (isDevAdmin) return ['OPERACAO', 'SLA', 'OPPO', 'OPPO_SETUP', 'ALMOXERIFADO'] as const;
+    // PCP pode visualizar as demais abas, mas não deve executar ações de abertura/gestão fora do OPPO Setup.
+    if (currentRole === 'PCP') return ['OPERACAO', 'SLA', 'OPPO', 'OPPO_SETUP', 'ALMOXERIFADO'] as const;
+    return ['OPERACAO', 'SLA', 'OPPO', 'OPPO_SETUP', 'ALMOXERIFADO'] as const;
+  }, [currentRole, isDevAdmin]);
+
+  useEffect(() => {
+    if (!allowedMainTabs.includes(activeMainTab)) {
+      setActiveMainTab(allowedMainTabs[0]);
+    }
+  }, [activeMainTab, allowedMainTabs]);
+
+  useEffect(() => {
+    if (canNavigateNonSetupTabs) return;
+    // PCP: trava navegação interna de abas fora do OPPO Setup.
+    if (oppoView !== 'PENDENTES') setOppoView('PENDENTES');
+    if (almoxView !== 'PENDENTES') setAlmoxView('PENDENTES');
+  }, [almoxView, canNavigateNonSetupTabs, oppoView]);
+  const isOppoSetupGeneratedRequest = (req: OppoRequest) =>
+    !!extractTaggedValue(req.notes, OPPO_SETUP_SESSION_TAG_PREFIX);
+
+  const oppoRequesterVisibleRequests = useMemo(() => {
+    if (isDevAdmin) return oppoRequests;
+    if (currentRole === 'ENGENHARIA_PROCESSO') {
+      return oppoRequests.filter(
+        (req) => req.callType === 'SOLICITACAO_DISPOSITIVO' && isOppoSetupGeneratedRequest(req)
+      );
+    }
+    return oppoRequests.filter((req) => req.createdBy === user?.id);
+  }, [currentRole, isDevAdmin, oppoRequests, user?.id]);
   const oppoRequesterPendingRequests = useMemo(
     () =>
       oppoRequesterVisibleRequests.filter(
@@ -3066,11 +3419,11 @@ export default function App() {
     [oppoSetupCompletedRequests, oppoSetupLayoutsByProduct]
   );
   const oppoSetupOeeLineOptions = useMemo(
-    () => Array.from(new Set(oppoSetupOeeRows.map((row) => row.line))).sort((a, b) => a.localeCompare(b)),
+    () => Array.from(new Set(oppoSetupOeeRows.map((row) => row.line))).sort((a, b) => String(a).localeCompare(String(b))),
     [oppoSetupOeeRows]
   );
   const oppoSetupOeeProductOptions = useMemo(
-    () => Array.from(new Set(oppoSetupOeeRows.map((row) => row.product))).sort((a, b) => a.localeCompare(b)),
+    () => Array.from(new Set(oppoSetupOeeRows.map((row) => row.product))).sort((a, b) => String(a).localeCompare(String(b))),
     [oppoSetupOeeRows]
   );
   const oppoSetupFilteredOeeRows = useMemo(
@@ -3104,19 +3457,42 @@ export default function App() {
     };
   }, [oppoSetupFilteredOeeRows]);
   const oppoSetupUnifiedInProgressCards = useMemo(
-    () => [
-      ...oppoSetupInProgressRequests.map((req) => ({
-        kind: 'REQUEST' as const,
-        key: `req-${req.id}`,
-        request: req,
-      })),
-      ...oppoSetupMinimizedSessions.map((session) => ({
-        kind: 'MINIMIZED' as const,
-        key: `min-${session.sessionId}`,
-        session,
-      })),
-    ],
-    [oppoSetupInProgressRequests, oppoSetupMinimizedSessions]
+    () => {
+      const activeSessionIds = new Set<string>();
+
+      oppoSetupInProgressRequests.forEach((req) => {
+        const sessionId = extractTaggedValue(req.notes, OPPO_SETUP_SESSION_TAG_PREFIX);
+        if (sessionId) activeSessionIds.add(sessionId);
+      });
+
+      oppoSetupMinimizedSessions.forEach((session) => {
+        if (session.sessionId) activeSessionIds.add(session.sessionId);
+      });
+
+      const solicitationCards = oppoSetupSolicitations
+        .filter((sol) => sol.status === 'ACCEPTED' && !sol.finishedAt)
+        .filter((sol) => !!sol.sessionId && !activeSessionIds.has(sol.sessionId))
+        .map((sol) => ({
+          kind: 'SOLICITATION' as const,
+          key: `sol-${sol.id}`,
+          solicitation: sol,
+        }));
+
+      return [
+        ...solicitationCards,
+        ...oppoSetupInProgressRequests.map((req) => ({
+          kind: 'REQUEST' as const,
+          key: `req-${req.id}`,
+          request: req,
+        })),
+        ...oppoSetupMinimizedSessions.map((session) => ({
+          kind: 'MINIMIZED' as const,
+          key: `min-${session.sessionId}`,
+          session,
+        })),
+      ];
+    },
+    [oppoSetupInProgressRequests, oppoSetupMinimizedSessions, oppoSetupSolicitations]
   );
   const oppoSetupSessionRequests = useMemo(() => {
     if (!oppoSetupStartDraft?.sessionId) return [] as OppoRequest[];
@@ -3234,7 +3610,7 @@ export default function App() {
   }, [requests, requestSearch, operacaoLineFilter]);
 
   const operacaoLineOptions = useMemo(
-    () => Array.from(new Set(requests.map((r) => r.line).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    () => Array.from(new Set(requests.map((r) => r.line).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b))),
     [requests]
   );
   const operacaoLineOptionsForSelect = useMemo(() => {
@@ -3907,93 +4283,113 @@ export default function App() {
       <main className="flex-1 max-w-7xl w-full mx-auto p-3 md:p-6">
         <div className="flex items-start gap-3 md:gap-4">
           <aside className="sticky top-20 hidden md:flex flex-col gap-2 rounded-2xl border border-zinc-200 bg-white p-2 shadow-sm">
-            <button
-              type="button"
-              onClick={() => setActiveMainTab('OPERACAO')}
-              className={`rounded-xl p-1.5 transition ${activeMainTab === 'OPERACAO' ? 'bg-blue-600 text-white shadow' : 'text-zinc-600 hover:bg-zinc-100'}`}
-              title="Operação"
-            >
-              <img src="/multi-m-logo.svg" alt="Multi" className="h-8 w-8 rounded-md object-cover" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveMainTab('SLA')}
-              className={`rounded-xl p-3 transition ${activeMainTab === 'SLA' ? 'bg-cyan-600 text-white shadow' : 'text-zinc-600 hover:bg-zinc-100'}`}
-              title="Painel SLA"
-            >
-              <BarChart3 size={18} />
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveMainTab('OPPO')}
-              className={`rounded-xl p-3 transition ${activeMainTab === 'OPPO' ? 'bg-zinc-900 text-white shadow' : 'text-zinc-600 hover:bg-zinc-100'}`}
-              title="Sistema OPPO"
-            >
-              <img src="/oppo-logo.svg" alt="OPPO" className="h-4 w-8 rounded-sm object-cover" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveMainTab('OPPO_SETUP')}
-              className={`rounded-xl p-3 transition ${activeMainTab === 'OPPO_SETUP' ? 'bg-emerald-600 text-white shadow' : 'text-zinc-600 hover:bg-zinc-100'}`}
-              title="Oppo Setup"
-            >
-              <img src="/oppo-setup-logo.svg" alt="Oppo Setup" className="h-4 w-8 rounded-sm object-cover" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveMainTab('ALMOXERIFADO')}
-              className={`rounded-xl p-3 transition ${activeMainTab === 'ALMOXERIFADO' ? 'bg-violet-600 text-white shadow' : 'text-zinc-600 hover:bg-zinc-100'}`}
-              title="Sistema Almoxerifado"
-            >
-              <Package size={18} />
-            </button>
+            {allowedMainTabs.includes('OPERACAO') && (
+              <button
+                type="button"
+                onClick={() => setActiveMainTab('OPERACAO')}
+                className={`rounded-xl p-1.5 transition ${activeMainTab === 'OPERACAO' ? 'bg-blue-600 text-white shadow' : 'text-zinc-600 hover:bg-zinc-100'}`}
+                title="Operação"
+              >
+                <img src="/multi-m-logo.svg" alt="Multi" className="h-8 w-8 rounded-md object-cover" />
+              </button>
+            )}
+            {allowedMainTabs.includes('SLA') && (
+              <button
+                type="button"
+                onClick={() => setActiveMainTab('SLA')}
+                className={`rounded-xl p-3 transition ${activeMainTab === 'SLA' ? 'bg-cyan-600 text-white shadow' : 'text-zinc-600 hover:bg-zinc-100'}`}
+                title="Painel SLA"
+              >
+                <BarChart3 size={18} />
+              </button>
+            )}
+            {allowedMainTabs.includes('OPPO') && (
+              <button
+                type="button"
+                onClick={() => setActiveMainTab('OPPO')}
+                className={`rounded-xl p-3 transition ${activeMainTab === 'OPPO' ? 'bg-zinc-900 text-white shadow' : 'text-zinc-600 hover:bg-zinc-100'}`}
+                title="Sistema OPPO"
+              >
+                <img src="/oppo-logo.svg" alt="OPPO" className="h-4 w-8 rounded-sm object-cover" />
+              </button>
+            )}
+            {allowedMainTabs.includes('OPPO_SETUP') && (
+              <button
+                type="button"
+                onClick={() => setActiveMainTab('OPPO_SETUP')}
+                className={`rounded-xl p-3 transition ${activeMainTab === 'OPPO_SETUP' ? 'bg-emerald-600 text-white shadow' : 'text-zinc-600 hover:bg-zinc-100'}`}
+                title="Oppo Setup"
+              >
+                <img src="/oppo-setup-logo.svg" alt="Oppo Setup" className="h-4 w-8 rounded-sm object-cover" />
+              </button>
+            )}
+            {allowedMainTabs.includes('ALMOXERIFADO') && (
+              <button
+                type="button"
+                onClick={() => setActiveMainTab('ALMOXERIFADO')}
+                className={`rounded-xl p-3 transition ${activeMainTab === 'ALMOXERIFADO' ? 'bg-violet-600 text-white shadow' : 'text-zinc-600 hover:bg-zinc-100'}`}
+                title="Sistema Almoxerifado"
+              >
+                <Package size={18} />
+              </button>
+            )}
           </aside>
 
           <section className="flex-1">
         <div className="mb-4 flex gap-1 overflow-x-auto whitespace-nowrap rounded-xl border border-zinc-200 bg-white p-1 md:hidden">
-          <button
-            type="button"
-            onClick={() => setActiveMainTab('OPERACAO')}
-            className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold transition-all ${activeMainTab === 'OPERACAO' ? 'bg-emerald-500 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
-          >
-            Operação
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveMainTab('SLA')}
-            className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold transition-all ${activeMainTab === 'SLA' ? 'bg-cyan-600 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
-          >
-            SLA
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveMainTab('OPPO')}
-            className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold transition-all ${activeMainTab === 'OPPO' ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
-          >
-            <span className="inline-flex items-center gap-2">
-              <img src="/oppo-logo.svg" alt="OPPO" className="h-3.5 w-7 rounded-sm object-cover" />
-              OPPO
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveMainTab('OPPO_SETUP')}
-            className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold transition-all ${activeMainTab === 'OPPO_SETUP' ? 'bg-emerald-600 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
-          >
-            <span className="inline-flex items-center gap-2">
-              <img src="/oppo-setup-logo.svg" alt="Oppo Setup" className="h-3.5 w-7 rounded-sm object-cover" />
-              Oppo Setup
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveMainTab('ALMOXERIFADO')}
-            className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold transition-all ${activeMainTab === 'ALMOXERIFADO' ? 'bg-violet-600 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
-          >
-            Almox
-          </button>
+          {allowedMainTabs.includes('OPERACAO') && (
+            <button
+              type="button"
+              onClick={() => setActiveMainTab('OPERACAO')}
+              className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold transition-all ${activeMainTab === 'OPERACAO' ? 'bg-emerald-500 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
+            >
+              Operação
+            </button>
+          )}
+          {allowedMainTabs.includes('SLA') && (
+            <button
+              type="button"
+              onClick={() => setActiveMainTab('SLA')}
+              className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold transition-all ${activeMainTab === 'SLA' ? 'bg-cyan-600 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
+            >
+              SLA
+            </button>
+          )}
+          {allowedMainTabs.includes('OPPO') && (
+            <button
+              type="button"
+              onClick={() => setActiveMainTab('OPPO')}
+              className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold transition-all ${activeMainTab === 'OPPO' ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
+            >
+              <span className="inline-flex items-center gap-2">
+                <img src="/oppo-logo.svg" alt="OPPO" className="h-3.5 w-7 rounded-sm object-cover" />
+                OPPO
+              </span>
+            </button>
+          )}
+          {allowedMainTabs.includes('OPPO_SETUP') && (
+            <button
+              type="button"
+              onClick={() => setActiveMainTab('OPPO_SETUP')}
+              className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold transition-all ${activeMainTab === 'OPPO_SETUP' ? 'bg-emerald-600 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
+            >
+              <span className="inline-flex items-center gap-2">
+                <img src="/oppo-setup-logo.svg" alt="Oppo Setup" className="h-3.5 w-7 rounded-sm object-cover" />
+                Oppo Setup
+              </span>
+            </button>
+          )}
+          {allowedMainTabs.includes('ALMOXERIFADO') && (
+            <button
+              type="button"
+              onClick={() => setActiveMainTab('ALMOXERIFADO')}
+              className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold transition-all ${activeMainTab === 'ALMOXERIFADO' ? 'bg-violet-600 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
+            >
+              Almox
+            </button>
+          )}
         </div>
-        {activeMainTab === 'OPERACAO' && (
+        {activeMainTab === 'OPERACAO' && allowedMainTabs.includes('OPERACAO') && (
           <>
         <div className="mb-4">
           <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">Indicadores por linha</label>
@@ -4228,7 +4624,7 @@ export default function App() {
           </>
         )}
 
-        {activeMainTab === 'SLA' && (
+        {activeMainTab === 'SLA' && allowedMainTabs.includes('SLA') && (
           <div className="space-y-4">
             <div className="sla-light-panel rounded-2xl border border-cyan-200 bg-gradient-to-r from-cyan-50 via-white to-blue-50 p-5 shadow-sm">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -4304,7 +4700,7 @@ export default function App() {
           </div>
         )}
 
-        {activeMainTab === 'OPPO' && (
+        {activeMainTab === 'OPPO' && allowedMainTabs.includes('OPPO') && (
           <div className="space-y-4">
             <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
               <h2 className="text-xl font-bold text-zinc-900 flex items-center gap-2">
@@ -4315,21 +4711,21 @@ export default function App() {
               <div className="mt-4 flex flex-wrap items-center gap-3">
                 <button
                   type="button"
+                  disabled={currentRole === 'PCP' && !isDevAdmin}
                   onClick={() => {
+                    if (currentRole === 'PCP' && !isDevAdmin) {
+                      window.alert('Usuários do PCP não podem abrir chamados nesta aba. Use apenas o OPPO Setup.');
+                      return;
+                    }
                     setOppoLineDraft('');
                     setOppoProductDraft('');
                     setShowOppoCallTypeModal(true);
                   }}
-                  className="inline-flex items-center gap-2 rounded-xl bg-zinc-900 px-4 py-2.5 text-sm font-bold text-white hover:bg-zinc-800"
+                  className="inline-flex items-center gap-2 rounded-xl bg-zinc-900 px-4 py-2.5 text-sm font-bold text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <PlusCircle size={16} />
                   Abertura de Chamado
                 </button>
-                {oppoCallType && (
-                  <span className="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-zinc-700">
-                    Último tipo selecionado: {getOppoCallTypeLabel(oppoCallType)}
-                  </span>
-                )}
               </div>
               <p className="mt-3 text-xs text-zinc-500">
                 Após finalização no Almoxerifado, o solicitante deve conferir se os equipamentos/dispositivos estão conforme.
@@ -4347,8 +4743,12 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setOppoView('HISTORICO')}
-                  className={`rounded-lg px-4 py-2 text-sm font-bold transition-all ${oppoView === 'HISTORICO' ? 'bg-emerald-600 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
+                  disabled={!canNavigateNonSetupTabs}
+                  onClick={() => {
+                    if (!canNavigateNonSetupTabs) return;
+                    setOppoView('HISTORICO');
+                  }}
+                  className={`rounded-lg px-4 py-2 text-sm font-bold transition-all ${oppoView === 'HISTORICO' ? 'bg-emerald-600 text-white' : 'text-zinc-600 hover:bg-zinc-100'} disabled:cursor-not-allowed disabled:opacity-50`}
                 >
                   Histórico
                 </button>
@@ -4407,7 +4807,10 @@ export default function App() {
                             </div>
                           )}
 
-                          {(req.status === 'FINALIZADO_ALMOXERIFADO' && req.callType === 'SOLICITACAO_DISPOSITIVO' && (isDevAdmin || req.createdBy === user?.id)) && (
+                          {(req.status === 'FINALIZADO_ALMOXERIFADO' &&
+                            req.callType === 'SOLICITACAO_DISPOSITIVO' &&
+                            (isDevAdmin ||
+                              (isOppoSetupGeneratedRequest(req) ? currentRole === 'ENGENHARIA_PROCESSO' : req.createdBy === user?.id))) && (
                             <div className="mt-3 flex flex-wrap gap-2">
                               <button
                                 type="button"
@@ -4521,7 +4924,7 @@ export default function App() {
           </div>
         )}
 
-        {activeMainTab === 'OPPO_SETUP' && (
+        {activeMainTab === 'OPPO_SETUP' && allowedMainTabs.includes('OPPO_SETUP') && (
           <div className="space-y-4">
             <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
               <h2 className="text-xl font-bold text-zinc-900 flex items-center gap-2">
@@ -4532,20 +4935,23 @@ export default function App() {
                 Inicie o setup informando linha, produto e tipo (Montagem/Embalagem).
               </p>
               <div className="mt-4 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOppoSetupStartDraft(null);
-                    setOppoSetupLineDraft('');
-                    setOppoSetupProductDraft('');
-                    setOppoSetupTypeDraft('');
-                    setShowOppoSetupStartModal(true);
-                  }}
-                  className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-700"
-                >
-                  <PlusCircle size={16} />
-                  Iniciar Setup
-                </button>
+                {(isDevAdmin || currentRole === 'PCP') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOppoSetupStartDraft(null);
+                      setOppoSetupLineDraft('');
+                      setOppoSetupProductDraft('');
+                      setOppoSetupTypeDraft('');
+                      setOppoSetupProductionOrderDraft('');
+                      setShowOppoSetupStartModal(true);
+                    }}
+                    className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-700"
+                  >
+                    <PlusCircle size={16} />
+                    {currentRole === 'PCP' && !isDevAdmin ? 'Abrir Solicitação' : 'Iniciar Setup'}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => openOppoSetupLayoutModal(oppoSetupProductDraft)}
@@ -4568,9 +4974,19 @@ export default function App() {
             <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
               <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-zinc-600">Como funciona</h3>
               <div className="space-y-2 text-sm text-zinc-600">
-                <p>1. Clique em <span className="font-semibold text-zinc-800">Iniciar Setup</span>.</p>
-                <p>2. Preencha <span className="font-semibold text-zinc-800">Linha</span>, <span className="font-semibold text-zinc-800">Produto</span> e <span className="font-semibold text-zinc-800">Tipo de Setup</span>.</p>
-                <p>3. O chamado fica em andamento nesta aba até a finalização do setup.</p>
+                {currentRole === 'PCP' && !isDevAdmin ? (
+                  <>
+                    <p>1. Clique em <span className="font-semibold text-zinc-800">Abrir Solicitação</span>.</p>
+                    <p>2. Preencha <span className="font-semibold text-zinc-800">Linha</span>, <span className="font-semibold text-zinc-800">Produto</span> e <span className="font-semibold text-zinc-800">Tipo de Setup</span>.</p>
+                    <p>3. A Engenharia de Processo dará o aceite e iniciará o setup.</p>
+                  </>
+                ) : (
+                  <>
+                    <p>1. Aguarde uma <span className="font-semibold text-zinc-800">Solicitação do PCP</span>.</p>
+                    <p>2. Dê <span className="font-semibold text-zinc-800">Aceite</span> para liberar o início do setup.</p>
+                    <p>3. Após o aceite, a tela de <span className="font-semibold text-zinc-800">Selecionar Posto do Setup</span> ficará disponível.</p>
+                  </>
+                )}
               </div>
             </div>
             <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
@@ -4600,6 +5016,118 @@ export default function App() {
 
               {oppoSetupView === 'EM_ANDAMENTO' && (
                 <>
+                  {oppoSetupSolicitations.length > 0 && (
+                    <div className="mb-4 rounded-2xl border border-zinc-200 bg-white p-4">
+                      <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-zinc-600">Solicitações do PCP</h3>
+                      <div className="space-y-2">
+                        {oppoSetupSolicitations
+                          .filter((sol) => {
+                            if (isDevAdmin) return sol.status !== 'CANCELLED';
+                            if (currentRole === 'PCP') return sol.createdBy === user?.id && sol.status !== 'CANCELLED';
+                            if (currentRole === 'ENGENHARIA_PROCESSO') return sol.status !== 'CANCELLED';
+                            return false;
+                          })
+                          .slice(0, 20)
+                          .map((sol) => {
+                            const sessionHasActivity = oppoRequests.some(
+                              (req) => extractTaggedValue(req.notes, OPPO_SETUP_SESSION_TAG_PREFIX) === sol.sessionId
+                            );
+                            const isFinished = sol.status === 'ACCEPTED' && !!sol.finishedAt;
+                            const statusStyle =
+                              sol.status === 'ACCEPTED'
+                                ? isFinished
+                                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                  : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                : 'border-amber-200 bg-amber-50 text-amber-700';
+                            const statusLabel = sol.status === 'ACCEPTED' ? (isFinished ? 'Finalizado' : 'Aceito') : 'Pendente';
+
+                            return (
+                              <div key={sol.id} className="rounded-xl border border-zinc-200 p-3">
+                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                  <div>
+                                    <p className="text-sm font-bold text-zinc-900">Setup: {sol.product}</p>
+                                    <p className="mt-1 text-xs text-zinc-500">
+                                      Linha: <span className="font-semibold text-zinc-700">{sol.line}</span> | Tipo:{' '}
+                                      <span className="font-semibold text-zinc-700">{sol.lineType}</span>
+                                    </p>
+                                    <p className="mt-1 text-xs text-zinc-500">
+                                      OP: <span className="font-semibold text-zinc-700">{sol.productionOrder || '--'}</span>
+                                    </p>
+                                    <p className="mt-1 text-xs text-zinc-500">
+                                      Solicitante: <span className="font-semibold text-zinc-700">{sol.createdByName || sol.createdBy}</span> -{' '}
+                                      {formatSafeDistanceToNow(sol.createdAt)}
+                                    </p>
+                                    {sol.status === 'ACCEPTED' && (
+                                      <p className="mt-1 text-xs text-zinc-500">
+                                        Aceite: <span className="font-semibold text-zinc-700">{sol.acceptedByName || sol.acceptedBy || '--'}</span> -{' '}
+                                        {sol.acceptedAt ? formatSafeDistanceToNow(sol.acceptedAt) : '--'}
+                                      </p>
+                                    )}
+                                    {isFinished && (
+                                      <p className="mt-1 text-xs text-zinc-500">
+                                        Finalizado: <span className="font-semibold text-zinc-700">{formatSafeDistanceToNow(sol.finishedAt as string)}</span>
+                                      </p>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className={`rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-wide ${statusStyle}`}>
+                                      {statusLabel}
+                                    </span>
+                                    {(isDevAdmin || currentRole === 'ENGENHARIA_PROCESSO') && sol.status === 'PENDING_PROCESSO' && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleAcceptOppoSetupSolicitation(sol)}
+                                        className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700"
+                                      >
+                                        Aceitar
+                                      </button>
+                                    )}
+                                    {(sol.status === 'ACCEPTED' &&
+                                      (isDevAdmin ||
+                                        currentRole === 'ENGENHARIA_PROCESSO' ||
+                                        (currentRole === 'PCP' && sol.createdBy === user?.id))) && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setOppoSetupStartDraft({
+                                            line: sol.line,
+                                            product: sol.product,
+                                            lineType: sol.lineType,
+                                            sessionId: sol.sessionId,
+                                            productionOrder: sol.productionOrder,
+                                          });
+                                          setShowOppoSetupPostsModal(true);
+                                        }}
+                                        className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-bold text-zinc-700 hover:bg-zinc-100"
+                                      >
+                                        Visualizar chamado
+                                      </button>
+                                    )}
+                                    {(isDevAdmin || (currentRole === 'PCP' && sol.createdBy === user?.id)) && sol.status === 'PENDING_PROCESSO' && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (!window.confirm('Cancelar esta solicitação?')) return;
+                                          handleCancelOppoSetupSolicitation(sol);
+                                        }}
+                                        className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100"
+                                      >
+                                        Cancelar
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                                {sol.status === 'ACCEPTED' && sessionHasActivity && (
+                                  <p className="mt-2 text-xs font-semibold text-zinc-600">
+                                    Setup já iniciado — acompanhe nos <span className="font-bold">Chamados em andamento</span> abaixo.
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  )}
                   <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-zinc-600">Chamados em andamento</h3>
                   {oppoSetupUnifiedInProgressCards.length === 0 ? (
                     <p className="text-sm text-zinc-500">Nenhum chamado em andamento no Oppo Setup.</p>
@@ -4618,6 +5146,12 @@ export default function App() {
                               </div>
                               <p className="mt-1 text-xs text-zinc-500">
                                 Linha: <span className="font-semibold text-zinc-700">{session.line}</span> | Tipo: <span className="font-semibold text-zinc-700">{session.lineType}</span>
+                                {session.productionOrder ? (
+                                  <>
+                                    {' '}
+                                    | OP: <span className="font-semibold text-zinc-700">{session.productionOrder}</span>
+                                  </>
+                                ) : null}
                               </p>
                               <div className="mt-3">
                                 <button
@@ -4625,6 +5159,48 @@ export default function App() {
                                   onClick={() => {
                                     setOppoSetupStartDraft(session);
                                     setOppoSetupMinimizedSessions((prev) => prev.filter((item) => item.sessionId !== session.sessionId));
+                                    setShowOppoSetupPostsModal(true);
+                                  }}
+                                  className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-bold text-zinc-700 hover:bg-zinc-100"
+                                >
+                                  Visualizar chamado
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        if (card.kind === 'SOLICITATION') {
+                          const sol = card.solicitation;
+                          return (
+                            <div key={card.key} className="rounded-xl border border-zinc-200 p-4">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="text-sm font-bold text-zinc-900">Setup: {sol.product || '--'}</p>
+                                <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-bold uppercase tracking-wide text-sky-700">
+                                  Em andamento
+                                </span>
+                              </div>
+                              <p className="mt-1 text-xs text-zinc-500">
+                                Linha: <span className="font-semibold text-zinc-700">{sol.line || '--'}</span> | Tipo:{' '}
+                                <span className="font-semibold text-zinc-700">{sol.lineType || '--'}</span>
+                                {sol.productionOrder ? (
+                                  <>
+                                    {' '}
+                                    | OP: <span className="font-semibold text-zinc-700">{sol.productionOrder}</span>
+                                  </>
+                                ) : null}
+                              </p>
+                              <div className="mt-3">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setOppoSetupStartDraft({
+                                      line: sol.line,
+                                      product: sol.product,
+                                      lineType: sol.lineType,
+                                      sessionId: sol.sessionId,
+                                      productionOrder: sol.productionOrder,
+                                    });
                                     setShowOppoSetupPostsModal(true);
                                   }}
                                   className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-bold text-zinc-700 hover:bg-zinc-100"
@@ -4807,7 +5383,7 @@ export default function App() {
           </div>
         )}
 
-        {activeMainTab === 'ALMOXERIFADO' && (
+        {activeMainTab === 'ALMOXERIFADO' && allowedMainTabs.includes('ALMOXERIFADO') && (
           <div className="space-y-4">
             <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
               <h2 className="text-xl font-bold text-zinc-900 flex items-center gap-2">
@@ -4835,15 +5411,23 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setAlmoxView('DEVOLUCOES')}
-                  className={`rounded-lg px-4 py-2 text-sm font-bold transition-all ${almoxView === 'DEVOLUCOES' ? 'bg-cyan-600 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
+                  disabled={!canNavigateNonSetupTabs}
+                  onClick={() => {
+                    if (!canNavigateNonSetupTabs) return;
+                    setAlmoxView('DEVOLUCOES');
+                  }}
+                  className={`rounded-lg px-4 py-2 text-sm font-bold transition-all ${almoxView === 'DEVOLUCOES' ? 'bg-cyan-600 text-white' : 'text-zinc-600 hover:bg-zinc-100'} disabled:cursor-not-allowed disabled:opacity-50`}
                 >
                   Devoluções
                 </button>
                 <button
                   type="button"
-                  onClick={() => setAlmoxView('HISTORICO')}
-                  className={`rounded-lg px-4 py-2 text-sm font-bold transition-all ${almoxView === 'HISTORICO' ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
+                  disabled={!canNavigateNonSetupTabs}
+                  onClick={() => {
+                    if (!canNavigateNonSetupTabs) return;
+                    setAlmoxView('HISTORICO');
+                  }}
+                  className={`rounded-lg px-4 py-2 text-sm font-bold transition-all ${almoxView === 'HISTORICO' ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-zinc-100'} disabled:cursor-not-allowed disabled:opacity-50`}
                 >
                   Histórico
                 </button>
@@ -4870,6 +5454,11 @@ export default function App() {
                           <p className="mt-1 text-xs text-zinc-500">
                             Linha: <span className="font-semibold text-zinc-700">{req.line || '--'}</span> | Produto: <span className="font-semibold text-zinc-700">{req.product || '--'}</span> | Tipo de linha: <span className="font-semibold text-zinc-700">{req.lineType || '--'}</span>
                           </p>
+                          {!!extractOppoProductionOrder(req.notes) && (
+                            <p className="mt-1 text-xs text-zinc-500">
+                              OP: <span className="font-semibold text-zinc-700">{extractOppoProductionOrder(req.notes)}</span>
+                            </p>
+                          )}
                           <p className="mt-1 text-xs text-zinc-500">
                             Itens pagos pelo almox: <span className="font-semibold text-zinc-700">{formatOppoPaidItems(req.paidItems)}</span>
                           </p>
@@ -4939,7 +5528,9 @@ export default function App() {
 
                           {req.status === 'FINALIZADO_ALMOXERIFADO' && (
                             <p className="mt-3 text-xs font-semibold text-violet-700">
-                              Aguardando conferência do solicitante.
+                              {isOppoSetupGeneratedRequest(req)
+                                ? 'Aguardando conferência da Eng. Processo.'
+                                : 'Aguardando conferência do solicitante.'}
                             </p>
                           )}
                         </div>
@@ -5420,6 +6011,7 @@ export default function App() {
                     setOppoSetupLineDraft('');
                     setOppoSetupProductDraft('');
                     setOppoSetupTypeDraft('');
+                    setOppoSetupProductionOrderDraft('');
                   }}
                   className="rounded-lg px-2 py-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
                   title="Fechar"
@@ -5465,6 +6057,16 @@ export default function App() {
                     <option value="EMBALAGEM">Embalagem</option>
                   </select>
                 </div>
+
+                <div className="space-y-1">
+                  <label className="text-sm font-bold text-zinc-700">Ordem de Produção</label>
+                  <input
+                    value={oppoSetupProductionOrderDraft}
+                    onChange={(e) => setOppoSetupProductionOrderDraft(e.target.value)}
+                    placeholder="Ex: OP123456"
+                    className="w-full rounded-xl border border-zinc-200 px-3 py-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200"
+                  />
+                </div>
               </div>
 
               <div className="mt-5 flex justify-end gap-2">
@@ -5474,6 +6076,7 @@ export default function App() {
                     setOppoSetupLineDraft('');
                     setOppoSetupProductDraft('');
                     setOppoSetupTypeDraft('');
+                    setOppoSetupProductionOrderDraft('');
                   }}
                   className="rounded-lg border border-zinc-300 px-3 py-2 text-xs font-bold text-zinc-600 hover:bg-zinc-50"
                 >
@@ -5482,25 +6085,43 @@ export default function App() {
                 <button
                   onClick={() => {
                     const product = oppoSetupProductDraft.trim();
+                    const productionOrder = oppoSetupProductionOrderDraft.trim();
                     if (!oppoSetupLineDraft || !product || !oppoSetupTypeDraft) {
                       window.alert('Preencha Linha, Produto e Tipo de Setup.');
                       return;
                     }
-                    setOppoSetupStartDraft({
-                      line: oppoSetupLineDraft,
-                      product,
-                      lineType: oppoSetupTypeDraft,
-                      sessionId: `S${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
-                    });
-                    setShowOppoSetupStartModal(false);
-                    setShowOppoSetupPostsModal(true);
+
+                    if (currentRole === 'PCP' && !isDevAdmin) {
+                      if (!productionOrder) {
+                        window.alert('Preencha a Ordem de Produção.');
+                        return;
+                      }
+                      handleCreateOppoSetupSolicitation({
+                        line: oppoSetupLineDraft,
+                        product,
+                        lineType: oppoSetupTypeDraft,
+                        productionOrder,
+                      });
+                      setShowOppoSetupStartModal(false);
+                    } else {
+                      setOppoSetupStartDraft({
+                        line: oppoSetupLineDraft,
+                        product,
+                        lineType: oppoSetupTypeDraft,
+                        sessionId: `S${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+                        productionOrder: productionOrder || undefined,
+                      });
+                      setShowOppoSetupStartModal(false);
+                      setShowOppoSetupPostsModal(true);
+                    }
                     setOppoSetupLineDraft('');
                     setOppoSetupProductDraft('');
                     setOppoSetupTypeDraft('');
+                    setOppoSetupProductionOrderDraft('');
                   }}
                   className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700"
                 >
-                  Iniciar Setup
+                  {currentRole === 'PCP' && !isDevAdmin ? 'Enviar Solicitação' : 'Iniciar Setup'}
                 </button>
               </div>
             </motion.div>
@@ -5522,18 +6143,24 @@ export default function App() {
                       Selecionar Posto do Setup
                     </h3>
                     <p className="mt-1 text-xs text-zinc-600">
-                      {oppoSetupStartDraft ? `Produto: ${oppoSetupStartDraft.product} | Linha: ${oppoSetupStartDraft.line} | Tipo: ${oppoSetupStartDraft.lineType}` : 'Selecione o posto para iniciar automaticamente o chamado.'}
+                      {oppoSetupStartDraft
+                        ? `Produto: ${oppoSetupStartDraft.product} | Linha: ${oppoSetupStartDraft.line} | Tipo: ${oppoSetupStartDraft.lineType}${
+                            oppoSetupStartDraft.productionOrder ? ` | OP: ${oppoSetupStartDraft.productionOrder}` : ''
+                          }`
+                        : 'Selecione o posto para iniciar automaticamente o chamado.'}
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => openOppoSetupLayoutModal(oppoSetupStartDraft?.product)}
-                      className="inline-flex items-center gap-1 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-[11px] font-bold text-zinc-700 hover:bg-zinc-100"
-                    >
-                      <Settings size={12} />
-                      Configurar layout
-                    </button>
+                    {(isDevAdmin || currentRole === 'ENGENHARIA_PROCESSO') && (
+                      <button
+                        type="button"
+                        onClick={() => openOppoSetupLayoutModal(oppoSetupStartDraft?.product)}
+                        className="inline-flex items-center gap-1 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-[11px] font-bold text-zinc-700 hover:bg-zinc-100"
+                      >
+                        <Settings size={12} />
+                        Configurar layout
+                      </button>
+                    )}
                     <button
                       onClick={() => {
                         if (oppoSetupStartDraft) {
@@ -5615,13 +6242,36 @@ export default function App() {
                 </p>
                 <button
                   type="button"
-                  disabled={!oppoSetupSessionAllPostsCompleted || oppoSetupSessionCompleted}
-                  onClick={() => {
+                  disabled={!oppoSetupSessionAllPostsCompleted || oppoSetupSessionCompleted || (!isDevAdmin && currentRole !== 'ENGENHARIA_PROCESSO')}
+                  onClick={async () => {
+                    if (!isDevAdmin && currentRole !== 'ENGENHARIA_PROCESSO') {
+                      window.alert('Apenas a Eng. de Processo pode finalizar o setup completo.');
+                      return;
+                    }
                     if (!oppoSetupStartDraft) return;
                     if (!oppoSetupSessionAllPostsCompleted) {
                       window.alert('Ainda existem postos pendentes. Conclua todos para finalizar o setup completo.');
                       return;
                     }
+
+                    const sessionId = oppoSetupStartDraft.sessionId;
+                    const solicitation = oppoSetupSolicitations.find((item) => item.sessionId === sessionId);
+                    if (solicitation && solicitation.status === 'ACCEPTED' && !solicitation.finishedAt) {
+                      const { data, error } = await supabase
+                        .from('oppo_setup_requests')
+                        .update({ finished_at: new Date().toISOString() })
+                        .eq('id', solicitation.id)
+                        .select('*')
+                        .single();
+
+                      if (error) {
+                        console.error('Finish OPPO setup solicitation error:', error);
+                      } else if (data) {
+                        const mapped = mapOppoSetupSolicitation(data as OppoSetupSolicitationRow);
+                        setOppoSetupSolicitations((prev) => prev.map((item) => (item.id === mapped.id ? mapped : item)));
+                      }
+                    }
+
                     setOppoSetupCompletedSessionIds((prev) =>
                       prev.includes(oppoSetupStartDraft.sessionId) ? prev : [...prev, oppoSetupStartDraft.sessionId]
                     );
@@ -5675,6 +6325,7 @@ export default function App() {
                             onClick={() => {
                               setShowOppoSetupLayoutsListModal(false);
                               setOppoSetupProductDraft(productKey);
+                              setOppoSetupProductionOrderDraft('');
                               setShowOppoSetupStartModal(true);
                             }}
                             className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700"
@@ -5718,6 +6369,14 @@ export default function App() {
                   <LogOut size={18} className="rotate-180" />
                 </button>
               </div>
+
+              {!canManageOppoSetupLayouts && (
+                <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                  <p className="text-xs font-semibold text-amber-800">
+                    Modo visualização: somente a Eng. de Processo pode cadastrar/alterar layouts.
+                  </p>
+                </div>
+              )}
 
               <div className="space-y-3 rounded-xl border border-zinc-200 bg-zinc-50 p-3">
                 <div className="space-y-1">
@@ -5764,12 +6423,14 @@ export default function App() {
                 <div className="grid grid-cols-1 gap-2 md:grid-cols-6">
                   <input
                     value={oppoSetupLayoutNewPostCode}
+                    disabled={!canManageOppoSetupLayouts}
                     onChange={(e) => setOppoSetupLayoutNewPostCode(e.target.value.toUpperCase())}
                     placeholder="Código (PP01, P01...)"
                     className="rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200"
                   />
                   <input
                     value={oppoSetupLayoutNewPostDescription}
+                    disabled={!canManageOppoSetupLayouts}
                     onChange={(e) => setOppoSetupLayoutNewPostDescription(e.target.value)}
                     placeholder="Descrição do posto"
                     className="md:col-span-2 rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200"
@@ -5777,8 +6438,9 @@ export default function App() {
                   <div className="md:col-span-3 flex items-center gap-2">
                     <button
                       type="button"
+                      disabled={!canManageOppoSetupLayouts}
                       onClick={() => setOppoSetupLayoutNewPostResourcesOpen((prev) => !prev)}
-                      className="rounded-md border border-zinc-300 bg-zinc-50 px-3 py-2 text-xs font-bold text-zinc-700 hover:bg-zinc-100"
+                      className="rounded-md border border-zinc-300 bg-zinc-50 px-3 py-2 text-xs font-bold text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       Recursos
                     </button>
@@ -5799,6 +6461,7 @@ export default function App() {
                       <label className="flex items-center gap-2 text-xs font-semibold text-zinc-700">
                         <input
                           type="checkbox"
+                          disabled={!canManageOppoSetupLayouts}
                           checked={oppoSetupLayoutNewPostMachine}
                           onChange={(e) => setOppoSetupLayoutNewPostMachine(e.target.checked)}
                           className="h-4 w-4 rounded border-zinc-300 text-emerald-600 focus:ring-emerald-500"
@@ -5808,6 +6471,7 @@ export default function App() {
                       <label className="flex items-center gap-2 text-xs font-semibold text-zinc-700">
                         <input
                           type="checkbox"
+                          disabled={!canManageOppoSetupLayouts}
                           checked={oppoSetupLayoutNewPostIonizer}
                           onChange={(e) => setOppoSetupLayoutNewPostIonizer(e.target.checked)}
                           className="h-4 w-4 rounded border-zinc-300 text-emerald-600 focus:ring-emerald-500"
@@ -5817,6 +6481,7 @@ export default function App() {
                       <label className="flex items-center gap-2 text-xs font-semibold text-zinc-700">
                         <input
                           type="checkbox"
+                          disabled={!canManageOppoSetupLayouts}
                           checked={oppoSetupLayoutNewPostLupa}
                           onChange={(e) => setOppoSetupLayoutNewPostLupa(e.target.checked)}
                           className="h-4 w-4 rounded border-zinc-300 text-emerald-600 focus:ring-emerald-500"
@@ -5829,8 +6494,9 @@ export default function App() {
                 <div className="mt-2">
                   <button
                     type="button"
+                    disabled={!canManageOppoSetupLayouts}
                     onClick={addPostToOppoSetupLayoutDraft}
-                    className="rounded-lg bg-cyan-600 px-3 py-2 text-xs font-bold text-white hover:bg-cyan-700"
+                    className="rounded-lg bg-cyan-600 px-3 py-2 text-xs font-bold text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Adicionar posto
                   </button>
@@ -5849,6 +6515,7 @@ export default function App() {
                       <div key={`${item.code}-${idx}`} className="grid grid-cols-1 gap-2 rounded-lg border border-zinc-200 bg-white p-2 md:grid-cols-12">
                         <input
                           value={item.code}
+                          disabled={!canManageOppoSetupLayouts}
                           onChange={(e) =>
                             setOppoSetupLayoutPostsDraft((prev) =>
                               prev.map((p, i) => (i === idx ? { ...p, code: e.target.value.toUpperCase() } : p))
@@ -5858,6 +6525,7 @@ export default function App() {
                         />
                         <input
                           value={item.description}
+                          disabled={!canManageOppoSetupLayouts}
                           onChange={(e) =>
                             setOppoSetupLayoutPostsDraft((prev) =>
                               prev.map((p, i) => (i === idx ? { ...p, description: e.target.value } : p))
@@ -5884,10 +6552,11 @@ export default function App() {
                           </span>
                           <button
                             type="button"
-                            disabled={idx === 0}
+                            disabled={!canManageOppoSetupLayouts || idx === 0}
                             onClick={() =>
                               setOppoSetupLayoutPostsDraft((prev) => {
                                 if (idx === 0) return prev;
+                                if (!canManageOppoSetupLayouts) return prev;
                                 const next = [...prev];
                                 [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
                                 return next.map((row, order) => ({ ...row, order }));
@@ -5899,10 +6568,11 @@ export default function App() {
                           </button>
                           <button
                             type="button"
-                            disabled={idx === oppoSetupLayoutPostsDraft.length - 1}
+                            disabled={!canManageOppoSetupLayouts || idx === oppoSetupLayoutPostsDraft.length - 1}
                             onClick={() =>
                               setOppoSetupLayoutPostsDraft((prev) => {
                                 if (idx >= prev.length - 1) return prev;
+                                if (!canManageOppoSetupLayouts) return prev;
                                 const next = [...prev];
                                 [next[idx + 1], next[idx]] = [next[idx], next[idx + 1]];
                                 return next.map((row, order) => ({ ...row, order }));
@@ -5914,8 +6584,9 @@ export default function App() {
                           </button>
                           <button
                             type="button"
+                            disabled={!canManageOppoSetupLayouts}
                             onClick={() => removePostFromOppoSetupLayoutDraft(idx)}
-                            className="rounded-md border border-red-300 bg-red-50 px-2 py-1 text-[10px] font-bold text-red-700 hover:bg-red-100"
+                            className="rounded-md border border-red-300 bg-red-50 px-2 py-1 text-[10px] font-bold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             Remover
                           </button>
@@ -5926,6 +6597,7 @@ export default function App() {
                               <label className="flex items-center gap-2 text-xs font-semibold text-zinc-700">
                                 <input
                                   type="checkbox"
+                                  disabled={!canManageOppoSetupLayouts}
                                   checked={item.isMachinePress}
                                   onChange={(e) =>
                                     setOppoSetupLayoutPostsDraft((prev) =>
@@ -5939,6 +6611,7 @@ export default function App() {
                               <label className="flex items-center gap-2 text-xs font-semibold text-zinc-700">
                                 <input
                                   type="checkbox"
+                                  disabled={!canManageOppoSetupLayouts}
                                   checked={item.hasIonizer}
                                   onChange={(e) =>
                                     setOppoSetupLayoutPostsDraft((prev) =>
@@ -5952,6 +6625,7 @@ export default function App() {
                               <label className="flex items-center gap-2 text-xs font-semibold text-zinc-700">
                                 <input
                                   type="checkbox"
+                                  disabled={!canManageOppoSetupLayouts}
                                   checked={item.hasLupa}
                                   onChange={(e) =>
                                     setOppoSetupLayoutPostsDraft((prev) =>
@@ -5974,17 +6648,19 @@ export default function App() {
               <div className="mt-5 flex flex-wrap justify-end gap-2">
                 <button
                   type="button"
+                  disabled={!canManageOppoSetupLayouts}
                   onClick={() => {
                     setOppoSetupLayoutPostsDraft(buildDefaultOppoSetupTemplate());
                   }}
-                  className="rounded-lg border border-zinc-300 px-3 py-2 text-xs font-bold text-zinc-600 hover:bg-zinc-50"
+                  className="rounded-lg border border-zinc-300 px-3 py-2 text-xs font-bold text-zinc-600 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Restaurar padrão
                 </button>
                 <button
                   type="button"
+                  disabled={!canManageOppoSetupLayouts}
                   onClick={removeOppoSetupLayoutDraft}
-                  className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100"
+                  className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Excluir layout do produto
                 </button>
@@ -5997,8 +6673,9 @@ export default function App() {
                 </button>
                 <button
                   type="button"
+                  disabled={!canManageOppoSetupLayouts}
                   onClick={saveOppoSetupLayoutDraft}
-                  className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700"
+                  className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Salvar layout
                 </button>
@@ -6726,6 +7403,10 @@ export default function App() {
                     <button
                       type="button"
                       onClick={async () => {
+                        const actorLabel =
+                          currentRole === 'ENGENHARIA_PROCESSO' && isOppoSetupGeneratedRequest(oppoRequesterConferenceRequest)
+                            ? 'Eng. Processo'
+                            : 'solicitante';
                         const noteSuffix = oppoRequesterConferenceNoteDraft.trim() ? ` Observação: ${oppoRequesterConferenceNoteDraft.trim()}.` : '';
                         if (conferenceItems.divergentItems.length === 0) {
                           window.alert('Não há pendências para divergência. Todos os itens foram conferidos.');
@@ -6737,7 +7418,7 @@ export default function App() {
                           requester_confirmed_by: user?.id || null,
                           requester_confirmed_by_name: profile?.displayName || user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email || 'Usuário',
                           paid_items_selected: conferenceItems.divergentItems,
-                          notes: `Divergência parcial apontada pelo solicitante. Itens conformes: ${formatOppoPaidItems(conferenceItems.confirmedItems)}. Itens pendentes para 2ª conferência: ${formatOppoPaidItems(conferenceItems.divergentItems)}.${noteSuffix}`,
+                          notes: `Divergência parcial apontada pelo ${actorLabel}. Itens conformes: ${formatOppoPaidItems(conferenceItems.confirmedItems)}. Itens pendentes para 2ª conferência: ${formatOppoPaidItems(conferenceItems.divergentItems)}.${noteSuffix}`,
                         });
                         closeOppoRequesterConferenceModal();
                       }}
@@ -6748,6 +7429,10 @@ export default function App() {
                     <button
                       type="button"
                       onClick={async () => {
+                        const actorLabel =
+                          currentRole === 'ENGENHARIA_PROCESSO' && isOppoSetupGeneratedRequest(oppoRequesterConferenceRequest)
+                            ? 'Eng. Processo'
+                            : 'solicitante';
                         const noteSuffix = oppoRequesterConferenceNoteDraft.trim() ? ` Observação: ${oppoRequesterConferenceNoteDraft.trim()}.` : '';
                         if (conferenceItems.divergentItems.length > 0) {
                           const shouldSendPartial = window.confirm('Existem pendências de quantidade. Deseja enviar somente os itens pendentes para 2ª conferência do Almoxerifado?');
@@ -6758,7 +7443,7 @@ export default function App() {
                             requester_confirmed_by: user?.id || null,
                             requester_confirmed_by_name: profile?.displayName || user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email || 'Usuário',
                             paid_items_selected: conferenceItems.divergentItems,
-                            notes: `Divergência parcial apontada no confirmar. Itens conformes: ${formatOppoPaidItems(conferenceItems.confirmedItems)}. Itens pendentes para 2ª conferência: ${formatOppoPaidItems(conferenceItems.divergentItems)}.${noteSuffix}`,
+                            notes: `Divergência parcial apontada pelo ${actorLabel}. Itens conformes: ${formatOppoPaidItems(conferenceItems.confirmedItems)}. Itens pendentes para 2ª conferência: ${formatOppoPaidItems(conferenceItems.divergentItems)}.${noteSuffix}`,
                           });
                           closeOppoRequesterConferenceModal();
                           return;
@@ -6768,7 +7453,7 @@ export default function App() {
                           requester_confirmed_at: new Date().toISOString(),
                           requester_confirmed_by: user?.id || null,
                           requester_confirmed_by_name: profile?.displayName || user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email || 'Usuário',
-                          notes: `Conferência concluída pelo solicitante. Itens conferidos: ${formatOppoPaidItems(conferenceItems.confirmedItems)}.${noteSuffix}`,
+                          notes: `Conferência concluída pelo ${actorLabel}. Itens conferidos: ${formatOppoPaidItems(conferenceItems.confirmedItems)}.${noteSuffix}`,
                         });
                         closeOppoRequesterConferenceModal();
                       }}
