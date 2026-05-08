@@ -2752,6 +2752,7 @@ export default function App() {
       window.alert(`Erro ao excluir histórico OPPO: ${error.message}`);
       return;
     }
+    // Confirmação rápida: se a RLS bloquear, o erro acima aparece; se a deleção for parcial, o realtime deve reajustar.
     const idSet = new Set(requestIds);
     setOppoRequests((prev) => prev.filter((req) => !idSet.has(req.id)));
   };

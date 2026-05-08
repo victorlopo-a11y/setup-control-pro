@@ -357,6 +357,14 @@ create policy "oppo_requests_update_authenticated"
   using (true)
   with check (true);
 
+-- Permite limpeza de histórico somente para emails de admin (mesma regra do setup_requests).
+drop policy if exists "oppo_requests_delete_dev_only" on public.oppo_requests;
+create policy "oppo_requests_delete_dev_only"
+  on public.oppo_requests
+  for delete
+  to authenticated
+  using (lower(auth.jwt() ->> 'email') in ('victor.lopo@grupomultilaser.com.br', 'devsistemasetup@gmail.com.br'));
+
 drop policy if exists "oppo_setup_layouts_select_all_authenticated" on public.oppo_setup_layouts;
 create policy "oppo_setup_layouts_select_all_authenticated"
   on public.oppo_setup_layouts
