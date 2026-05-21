@@ -25,8 +25,11 @@ View your app in AI Studio: https://ai.studio/apps/88cae728-7ea5-4ec0-8cc3-3b8a1
 6. In Supabase Auth > URL Configuration, add:
    - `http://localhost:3000` as Site URL
    - `http://localhost:3000` in Redirect URLs
-7. (Optional) Set `GEMINI_API_KEY` in `.env.local` if using Gemini features
-8. Run the app:
+7. In Supabase Dashboard, allow your dev origin for the **Data API (REST)** (CORS):
+   - Add `http://127.0.0.1:3000` and `http://localhost:3000` in the Data API / CORS Allowed Origins settings
+   - If you use the Vite local proxy (`VITE_SUPABASE_PROXY="true"`), this step is optional, but direct mode is usually more stable.
+8. (Optional) Set `GEMINI_API_KEY` in `.env.local` if using Gemini features
+9. Run the app:
    `npm run dev`
 
 ## Supabase Keepalive (anti-pausa por inatividade)
