@@ -1,4 +1,5 @@
-import { createClient } from '@supabase/supabase-js';
+﻿import { createClient } from '@supabase/supabase-js';
+import { RealtimeClient } from '@supabase/realtime-js';
 
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
@@ -36,11 +37,12 @@ const looksLikeJwt = (value: string) => value.split('.').length === 3;
 export const isSupabaseAnonKeyLikelyInvalid =
   !supabaseAnonKey ||
   supabaseAnonKey.startsWith('sb_secret_') ||
-  (supabaseAnonKey.startsWith('sb_publishable_') && !looksLikeJwt(supabaseAnonKey)) ||
+  // New Supabase key formats like sb_publishable_... are valid but are not JWTs.
+  // The legacy anon key is JWT-like (eyJ...). Accept either.
   (!supabaseAnonKey.startsWith('sb_publishable_') && !looksLikeJwt(supabaseAnonKey));
 
 export const supabaseAnonKeyHint = isSupabaseAnonKeyLikelyInvalid
-  ? 'Sua VITE_SUPABASE_ANON_KEY parece inválida para o supabase-js. Use a chave "Legacy anon" (formato JWT que começa com "eyJ...").'
+  ? 'Sua VITE_SUPABASE_ANON_KEY parece invÃ¡lida para o supabase-js. Use a chave "Legacy anon" (formato JWT que comeÃ§a com "eyJ...") ou uma "sb_publishable_..." vÃ¡lida.'
   : '';
 
 const noCookieFetch: typeof fetch = (input, init) => {
@@ -135,7 +137,7 @@ const retryableSupabaseFetch: typeof fetch = async (input, init) => {
   throw lastError instanceof Error ? lastError : new Error('Supabase fetch failed');
 };
 
-export const supabase = createClient(
+const supabaseClient = createClient(
   getSupabaseBaseUrl() || 'https://example.supabase.co',
   supabaseAnonKey || 'missing-supabase-anon-key',
   {
@@ -149,3 +151,18 @@ export const supabase = createClient(
     },
   }
 );
+
+// When base URL is a Netlify Function, Realtime must still use the direct Supabase endpoint (WebSockets).
+// supabase-js doesn't currently expose an option to override realtime URL, so we patch it at runtime.
+if (!import.meta.env.DEV && typeof window !== 'undefined') {
+  try {
+    const wsUrl = `${supabaseUrl.replace(/\/$/, '').replace(/^https:/, 'wss:')}/realtime/v1`;
+    (supabaseClient as any).realtime = new RealtimeClient(wsUrl, {
+      params: { apikey: supabaseAnonKey || '' },
+    });
+  } catch {
+    // ignore; app will fallback to REST polling only
+  }
+}
+
+export const supabase = supabaseClient;

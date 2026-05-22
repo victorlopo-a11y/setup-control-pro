@@ -54,6 +54,10 @@ export const handler = async (event) => {
   passHeader('range');
   passHeader('range-unit');
 
+  // If the browser client didn't send Authorization, default to Bearer anon/publishable key.
+  // PostgREST commonly requires both `apikey` and `authorization` for RLS-authenticated access.
+  if (!headers.authorization) headers.authorization = `Bearer ${SUPABASE_ANON_KEY}`;
+
   try {
     const resp = await fetch(upstreamUrl, {
       method: event.httpMethod,
