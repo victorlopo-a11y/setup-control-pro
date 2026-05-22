@@ -7,7 +7,7 @@ create table if not exists public.users (
   id uuid primary key references auth.users(id) on delete cascade,
   email text not null,
   display_name text not null,
-  role text not null check (role in ('PRODUCAO', 'QUALIDADE', 'AREA_KIT', 'PCP', 'ENGENHARIA_SETUP', 'ENGENHARIA_TESTE', 'ENGENHARIA_AUTOMACAO', 'ENGENHARIA_PROCESSO', 'ALMOXERIFADO')),
+  role text not null check (role in ('PRODUCAO', 'QUALIDADE', 'AREA_KIT', 'PCP', 'ENGENHARIA_SETUP', 'ENGENHARIA_TESTE', 'ENGENHARIA_AUTOMACAO', 'ENGENHARIA_PROCESSO', 'ALMOXERIFADO', 'DEV_ADMIN')),
   created_at timestamptz not null default now()
 );
 
@@ -44,7 +44,7 @@ create table if not exists public.setup_requests (
   automacao_checklist_completed boolean not null default false,
   automacao_checklist_completed_at timestamptz,
   automacao_sync_validated boolean,
-  status text not null check (status in ('PENDING_QUALITY', 'PENDING_KIT', 'PENDING_QUALITY_AND_KIT', 'PENDING_SETUP_AND_KIT', 'PENDING_SETUP', 'IN_PROGRESS', 'PENDING_KIT_AFTER_SETUP', 'PENDING_TESTE', 'TESTE_IN_PROGRESS', 'PENDING_PROCESSO', 'PROCESSO_IN_PROGRESS', 'PENDING_AUTOMACAO', 'AUTOMACAO_IN_PROGRESS', 'COMPLETED')),
+  status text not null check (status in ('PENDING_QUALITY', 'PENDING_KIT', 'PENDING_QUALITY_AND_KIT', 'PENDING_SETUP_AND_KIT', 'PENDING_SETUP', 'IN_PROGRESS', 'PENDING_KIT_AFTER_SETUP', 'PENDING_TESTE', 'TESTE_IN_PROGRESS', 'PENDING_PROCESSO', 'PROCESSO_IN_PROGRESS', 'PENDING_AUTOMACAO', 'AUTOMACAO_IN_PROGRESS', 'COMPLETED', 'CANCELLED')),
   token text,
   created_by uuid not null references auth.users(id) on delete cascade,
   created_by_name text,
@@ -70,7 +70,7 @@ create table if not exists public.oppo_requests (
   status text not null check (status in ('ABERTO', 'SEPARACAO', 'CONFERINDO', 'FINALIZADO_ALMOXERIFADO', 'CONCLUIDO', 'DIVERGENCIA')),
   line text,
   product text,
-  line_type text check (line_type in ('MONTAGEM/TESTE', 'EMBALAGEM')),
+  line_type text check (line_type in ('MONTAGEM', 'MONTAGEM/TESTE', 'EMBALAGEM')),
   created_by uuid not null references auth.users(id) on delete cascade,
   created_by_name text,
   almox_by uuid references auth.users(id) on delete set null,
@@ -90,19 +90,22 @@ create table if not exists public.oppo_requests (
 );
 
 create table if not exists public.oppo_setup_layouts (
-  product_key text primary key,
+  product_key text not null,
+  target_role text not null check (target_role in ('ENGENHARIA_PROCESSO', 'ENGENHARIA_TESTE')),
   posts jsonb not null default '[]'::jsonb,
   updated_at timestamptz not null default now(),
   updated_by uuid references auth.users(id) on delete set null,
-  updated_by_name text
+  updated_by_name text,
+  primary key (product_key, target_role)
 );
 
 create table if not exists public.oppo_setup_requests (
   id uuid primary key default gen_random_uuid(),
   line text not null,
   product text not null,
-  line_type text not null check (line_type in ('MONTAGEM/TESTE', 'EMBALAGEM')),
+  line_type text not null check (line_type in ('MONTAGEM', 'MONTAGEM/TESTE', 'EMBALAGEM')),
   production_order text not null,
+  target_role text not null check (target_role in ('ENGENHARIA_PROCESSO', 'ENGENHARIA_TESTE')),
   status text not null check (status in ('PENDING_PROCESSO', 'ACCEPTED', 'CANCELLED')),
   session_id text not null,
   created_by uuid not null references auth.users(id) on delete cascade,
@@ -128,7 +131,7 @@ begin
     select 1
     from public.oppo_requests r
     where r.call_type = 'SOLICITACAO_DISPOSITIVO'
-      and r.notes like ('[SETUP_SESSION:' || new.session_id || ']%')
+      and r.notes like ('[SETUP_SESSION:' || new.session_id || '] [SETUP_TARGET_ROLE:' || new.target_role || ']%')
   ) then
     return new;
   end if;
@@ -152,7 +155,7 @@ begin
     new.created_by,
     new.created_by_name,
     now(),
-    '[SETUP_SESSION:' || new.session_id || '] [SETUP_OP:' || coalesce(new.production_order,'') || '] Solicitação automática de materiais para setup.'
+    '[SETUP_SESSION:' || new.session_id || '] [SETUP_TARGET_ROLE:' || new.target_role || '] [SETUP_OP:' || coalesce(new.production_order,'') || '] Solicitação automática de materiais para setup.'
   );
   return new;
 exception when others then
@@ -166,6 +169,66 @@ create trigger trg_oppo_setup_create_almox_request
 after insert on public.oppo_setup_requests
 for each row
 execute function public.oppo_setup_create_almox_request();
+
+-- RPC: Upsert de layouts por setor (workaround para instabilidades no PostgREST upsert)
+create or replace function public.upsert_oppo_setup_layout(
+  p_product_key text,
+  p_target_role text,
+  p_posts jsonb,
+  p_updated_by uuid,
+  p_updated_by_name text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  jwt_role text;
+begin
+  jwt_role := auth.jwt() -> 'user_metadata' ->> 'role';
+
+  if jwt_role is null or jwt_role = '' then
+    raise exception 'Unauthorized';
+  end if;
+
+  if jwt_role <> 'DEV_ADMIN' and jwt_role <> 'ENGENHARIA_PROCESSO' and jwt_role <> 'ENGENHARIA_TESTE' then
+    raise exception 'Forbidden';
+  end if;
+
+  if jwt_role = 'ENGENHARIA_PROCESSO' and p_target_role <> 'ENGENHARIA_PROCESSO' then
+    raise exception 'Forbidden';
+  end if;
+
+  if jwt_role = 'ENGENHARIA_TESTE' and p_target_role <> 'ENGENHARIA_TESTE' then
+    raise exception 'Forbidden';
+  end if;
+
+  insert into public.oppo_setup_layouts (
+    product_key,
+    target_role,
+    posts,
+    updated_at,
+    updated_by,
+    updated_by_name
+  ) values (
+    upper(btrim(coalesce(p_product_key,''))),
+    p_target_role,
+    coalesce(p_posts, '[]'::jsonb),
+    now(),
+    p_updated_by,
+    p_updated_by_name
+  )
+  on conflict (product_key, target_role) do update
+    set posts = excluded.posts,
+        updated_at = excluded.updated_at,
+        updated_by = excluded.updated_by,
+        updated_by_name = excluded.updated_by_name;
+end;
+$$;
+
+revoke all on function public.upsert_oppo_setup_layout(text,text,jsonb,uuid,text) from public;
+grant execute on function public.upsert_oppo_setup_layout(text,text,jsonb,uuid,text) to authenticated;
 
 -- Migration helpers for existing projects
 alter table public.setup_requests add column if not exists sa_paid_by_kit boolean not null default true;
@@ -227,17 +290,22 @@ alter table public.oppo_requests add column if not exists paid_items_note text;
 alter table public.oppo_requests add column if not exists notes text;
 
 create table if not exists public.oppo_setup_layouts (
-  product_key text primary key,
+  product_key text not null,
+  target_role text not null check (target_role in ('ENGENHARIA_PROCESSO', 'ENGENHARIA_TESTE')),
   posts jsonb not null default '[]'::jsonb,
   updated_at timestamptz not null default now(),
   updated_by uuid references auth.users(id) on delete set null,
-  updated_by_name text
+  updated_by_name text,
+  primary key (product_key, target_role)
 );
-alter table public.oppo_setup_layouts add column if not exists product_key text;
-alter table public.oppo_setup_layouts add column if not exists posts jsonb not null default '[]'::jsonb;
-alter table public.oppo_setup_layouts add column if not exists updated_at timestamptz not null default now();
-alter table public.oppo_setup_layouts add column if not exists updated_by uuid;
-alter table public.oppo_setup_layouts add column if not exists updated_by_name text;
+-- Migration helpers (layout por setor)
+alter table public.oppo_setup_layouts add column if not exists target_role text;
+update public.oppo_setup_layouts set target_role = 'ENGENHARIA_PROCESSO' where target_role is null;
+alter table public.oppo_setup_layouts alter column target_role set not null;
+alter table public.oppo_setup_layouts drop constraint if exists oppo_setup_layouts_target_role_check;
+alter table public.oppo_setup_layouts add constraint oppo_setup_layouts_target_role_check check (target_role in ('ENGENHARIA_PROCESSO', 'ENGENHARIA_TESTE'));
+alter table public.oppo_setup_layouts drop constraint if exists oppo_setup_layouts_pkey;
+alter table public.oppo_setup_layouts add primary key (product_key, target_role);
 
 -- Optional backfill for old rows (if public.users has the profile)
 update public.setup_requests sr
@@ -262,17 +330,27 @@ where sr.created_by = au.id
 alter table public.users drop constraint if exists users_role_check;
 alter table public.users
   add constraint users_role_check
-  check (role in ('PRODUCAO', 'QUALIDADE', 'AREA_KIT', 'PCP', 'ENGENHARIA_SETUP', 'ENGENHARIA_TESTE', 'ENGENHARIA_AUTOMACAO', 'ENGENHARIA_PROCESSO', 'ALMOXERIFADO'));
+  check (role in ('PRODUCAO', 'QUALIDADE', 'AREA_KIT', 'PCP', 'ENGENHARIA_SETUP', 'ENGENHARIA_TESTE', 'ENGENHARIA_AUTOMACAO', 'ENGENHARIA_PROCESSO', 'ALMOXERIFADO', 'DEV_ADMIN'));
 
 alter table public.setup_requests drop constraint if exists setup_requests_status_check;
 alter table public.setup_requests
   add constraint setup_requests_status_check
-  check (status in ('PENDING_QUALITY', 'PENDING_KIT', 'PENDING_QUALITY_AND_KIT', 'PENDING_SETUP_AND_KIT', 'PENDING_SETUP', 'IN_PROGRESS', 'PENDING_KIT_AFTER_SETUP', 'PENDING_TESTE', 'TESTE_IN_PROGRESS', 'PENDING_PROCESSO', 'PROCESSO_IN_PROGRESS', 'PENDING_AUTOMACAO', 'AUTOMACAO_IN_PROGRESS', 'COMPLETED'));
+  check (status in ('PENDING_QUALITY', 'PENDING_KIT', 'PENDING_QUALITY_AND_KIT', 'PENDING_SETUP_AND_KIT', 'PENDING_SETUP', 'IN_PROGRESS', 'PENDING_KIT_AFTER_SETUP', 'PENDING_TESTE', 'TESTE_IN_PROGRESS', 'PENDING_PROCESSO', 'PROCESSO_IN_PROGRESS', 'PENDING_AUTOMACAO', 'AUTOMACAO_IN_PROGRESS', 'COMPLETED', 'CANCELLED'));
 
 alter table public.oppo_requests drop constraint if exists oppo_requests_status_check;
 alter table public.oppo_requests
   add constraint oppo_requests_status_check
   check (status in ('ABERTO', 'SEPARACAO', 'CONFERINDO', 'FINALIZADO_ALMOXERIFADO', 'CONCLUIDO', 'DIVERGENCIA'));
+
+alter table public.oppo_requests drop constraint if exists oppo_requests_line_type_check;
+alter table public.oppo_requests
+  add constraint oppo_requests_line_type_check
+  check (line_type is null or line_type in ('MONTAGEM', 'MONTAGEM/TESTE', 'EMBALAGEM'));
+
+alter table public.oppo_setup_requests drop constraint if exists oppo_setup_requests_line_type_check;
+alter table public.oppo_setup_requests
+  add constraint oppo_setup_requests_line_type_check
+  check (line_type in ('MONTAGEM', 'MONTAGEM/TESTE', 'EMBALAGEM'));
 
 alter table public.users enable row level security;
 alter table public.setup_requests enable row level security;
@@ -282,7 +360,12 @@ alter table public.oppo_setup_requests enable row level security;
 
 -- Migration helpers for existing projects
 alter table public.oppo_setup_requests add column if not exists production_order text;
+alter table public.oppo_setup_requests add column if not exists target_role text not null default 'ENGENHARIA_PROCESSO';
 alter table public.oppo_setup_requests add column if not exists finished_at timestamptz;
+alter table public.oppo_setup_requests drop constraint if exists oppo_setup_requests_target_role_check;
+alter table public.oppo_setup_requests
+  add constraint oppo_setup_requests_target_role_check
+  check (target_role in ('ENGENHARIA_PROCESSO', 'ENGENHARIA_TESTE'));
 
 drop policy if exists "users_select_own" on public.users;
 create policy "users_select_own"
@@ -333,14 +416,53 @@ create policy "setup_requests_delete_dev_only"
   on public.setup_requests
   for delete
   to authenticated
-  using (lower(auth.jwt() ->> 'email') in ('victor.lopo@grupomultilaser.com.br'));
+  using (
+    lower(auth.jwt() ->> 'email') in ('victor.lopo@grupomultilaser.com.br')
+    or exists (
+      select 1
+      from public.users u
+      where u.id = auth.uid()
+        and u.role = 'DEV_ADMIN'
+    )
+  );
 
 drop policy if exists "oppo_requests_select_all_authenticated" on public.oppo_requests;
 create policy "oppo_requests_select_all_authenticated"
   on public.oppo_requests
   for select
   to authenticated
-  using (true);
+  using (
+    exists (
+      select 1
+      from public.users u
+      where u.id = auth.uid()
+        and u.role in ('DEV_ADMIN', 'ALMOXERIFADO')
+    )
+    or created_by = auth.uid()
+    or almox_by = auth.uid()
+    or (
+      call_type = 'SOLICITACAO_DISPOSITIVO'
+      and notes like '%[SETUP_SESSION:%'
+      and exists (
+        select 1
+        from public.users u
+        where u.id = auth.uid()
+          and u.role = 'ENGENHARIA_PROCESSO'
+      )
+      and notes like '%[SETUP_TARGET_ROLE:ENGENHARIA_PROCESSO]%'
+    )
+    or (
+      call_type = 'SOLICITACAO_DISPOSITIVO'
+      and notes like '%[SETUP_SESSION:%'
+      and exists (
+        select 1
+        from public.users u
+        where u.id = auth.uid()
+          and u.role = 'ENGENHARIA_TESTE'
+      )
+      and notes like '%[SETUP_TARGET_ROLE:ENGENHARIA_TESTE]%'
+    )
+  );
 
 drop policy if exists "oppo_requests_insert_authenticated" on public.oppo_requests;
 create policy "oppo_requests_insert_authenticated"
@@ -354,8 +476,70 @@ create policy "oppo_requests_update_authenticated"
   on public.oppo_requests
   for update
   to authenticated
-  using (true)
-  with check (true);
+  using (
+    exists (
+      select 1
+      from public.users u
+      where u.id = auth.uid()
+        and u.role in ('DEV_ADMIN', 'ALMOXERIFADO')
+    )
+    or created_by = auth.uid()
+    or almox_by = auth.uid()
+    or (
+      call_type = 'SOLICITACAO_DISPOSITIVO'
+      and notes like '%[SETUP_SESSION:%'
+      and exists (
+        select 1
+        from public.users u
+        where u.id = auth.uid()
+          and u.role = 'ENGENHARIA_PROCESSO'
+      )
+      and notes like '%[SETUP_TARGET_ROLE:ENGENHARIA_PROCESSO]%'
+    )
+    or (
+      call_type = 'SOLICITACAO_DISPOSITIVO'
+      and notes like '%[SETUP_SESSION:%'
+      and exists (
+        select 1
+        from public.users u
+        where u.id = auth.uid()
+          and u.role = 'ENGENHARIA_TESTE'
+      )
+      and notes like '%[SETUP_TARGET_ROLE:ENGENHARIA_TESTE]%'
+    )
+  )
+  with check (
+    exists (
+      select 1
+      from public.users u
+      where u.id = auth.uid()
+        and u.role in ('DEV_ADMIN', 'ALMOXERIFADO')
+    )
+    or created_by = auth.uid()
+    or almox_by = auth.uid()
+    or (
+      call_type = 'SOLICITACAO_DISPOSITIVO'
+      and notes like '%[SETUP_SESSION:%'
+      and exists (
+        select 1
+        from public.users u
+        where u.id = auth.uid()
+          and u.role = 'ENGENHARIA_PROCESSO'
+      )
+      and notes like '%[SETUP_TARGET_ROLE:ENGENHARIA_PROCESSO]%'
+    )
+    or (
+      call_type = 'SOLICITACAO_DISPOSITIVO'
+      and notes like '%[SETUP_SESSION:%'
+      and exists (
+        select 1
+        from public.users u
+        where u.id = auth.uid()
+          and u.role = 'ENGENHARIA_TESTE'
+      )
+      and notes like '%[SETUP_TARGET_ROLE:ENGENHARIA_TESTE]%'
+    )
+  );
 
 -- Permite limpeza de histórico somente para emails de admin (mesma regra do setup_requests).
 drop policy if exists "oppo_requests_delete_dev_only" on public.oppo_requests;
@@ -363,7 +547,15 @@ create policy "oppo_requests_delete_dev_only"
   on public.oppo_requests
   for delete
   to authenticated
-  using (lower(auth.jwt() ->> 'email') in ('victor.lopo@grupomultilaser.com.br', 'devsistemasetup@gmail.com.br'));
+  using (
+    lower(auth.jwt() ->> 'email') in ('victor.lopo@grupomultilaser.com.br', 'devsistemasetup@gmail.com.br')
+    or exists (
+      select 1
+      from public.users u
+      where u.id = auth.uid()
+        and u.role = 'DEV_ADMIN'
+    )
+  );
 
 drop policy if exists "oppo_setup_layouts_select_all_authenticated" on public.oppo_setup_layouts;
 create policy "oppo_setup_layouts_select_all_authenticated"
@@ -399,7 +591,33 @@ create policy "oppo_setup_requests_select_all_authenticated"
   on public.oppo_setup_requests
   for select
   to authenticated
-  using (true);
+  using (
+    exists (
+      select 1
+      from public.users u
+      where u.id = auth.uid()
+        and u.role = 'DEV_ADMIN'
+    )
+    or created_by = auth.uid()
+    or (
+      exists (
+        select 1
+        from public.users u
+        where u.id = auth.uid()
+          and u.role = 'ENGENHARIA_PROCESSO'
+      )
+      and target_role = 'ENGENHARIA_PROCESSO'
+    )
+    or (
+      exists (
+        select 1
+        from public.users u
+        where u.id = auth.uid()
+          and u.role = 'ENGENHARIA_TESTE'
+      )
+      and target_role = 'ENGENHARIA_TESTE'
+    )
+  );
 
 drop policy if exists "oppo_setup_requests_insert_authenticated" on public.oppo_setup_requests;
 create policy "oppo_setup_requests_insert_authenticated"
@@ -413,5 +631,57 @@ create policy "oppo_setup_requests_update_authenticated"
   on public.oppo_setup_requests
   for update
   to authenticated
-  using (true)
-  with check (true);
+  using (
+    exists (
+      select 1
+      from public.users u
+      where u.id = auth.uid()
+        and u.role = 'DEV_ADMIN'
+    )
+    or created_by = auth.uid()
+    or (
+      exists (
+        select 1
+        from public.users u
+        where u.id = auth.uid()
+          and u.role = 'ENGENHARIA_PROCESSO'
+      )
+      and target_role = 'ENGENHARIA_PROCESSO'
+    )
+    or (
+      exists (
+        select 1
+        from public.users u
+        where u.id = auth.uid()
+          and u.role = 'ENGENHARIA_TESTE'
+      )
+      and target_role = 'ENGENHARIA_TESTE'
+    )
+  )
+  with check (
+    exists (
+      select 1
+      from public.users u
+      where u.id = auth.uid()
+        and u.role = 'DEV_ADMIN'
+    )
+    or created_by = auth.uid()
+    or (
+      exists (
+        select 1
+        from public.users u
+        where u.id = auth.uid()
+          and u.role = 'ENGENHARIA_PROCESSO'
+      )
+      and target_role = 'ENGENHARIA_PROCESSO'
+    )
+    or (
+      exists (
+        select 1
+        from public.users u
+        where u.id = auth.uid()
+          and u.role = 'ENGENHARIA_TESTE'
+      )
+      and target_role = 'ENGENHARIA_TESTE'
+    )
+  );

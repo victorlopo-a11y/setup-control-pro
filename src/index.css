@@ -61,23 +61,152 @@ html.dark textarea {
   border-color: #334155 !important;
 }
 
-html.dark .bg-emerald-50,
-html.dark .bg-indigo-50,
-html.dark .bg-sky-50,
-html.dark .bg-cyan-50,
-html.dark .bg-amber-50,
-html.dark .bg-orange-50,
-html.dark .bg-rose-50,
-html.dark .bg-stone-100,
-html.dark .bg-stone-200,
-html.dark .bg-teal-50,
-html.dark .bg-teal-100,
-html.dark .bg-fuchsia-100,
-html.dark .bg-purple-50,
-html.dark .bg-blue-50 {
-  filter: brightness(0.82);
+/*
+  In dark mode, avoid applying `filter` to "soft background" utility classes (bg-*-50/100),
+  because it also affects text/icons and can reduce contrast. Instead, map them to dark
+  tinted backgrounds so content stays readable.
+*/
+html.dark .bg-emerald-50 {
+  background-color: rgba(16, 185, 129, 0.14) !important;
 }
 
+html.dark .bg-indigo-50 {
+  background-color: rgba(99, 102, 241, 0.14) !important;
+}
+
+html.dark .bg-sky-50 {
+  background-color: rgba(14, 165, 233, 0.14) !important;
+}
+
+html.dark .bg-cyan-50 {
+  background-color: rgba(6, 182, 212, 0.14) !important;
+}
+
+html.dark .bg-blue-50 {
+  background-color: rgba(59, 130, 246, 0.14) !important;
+}
+
+html.dark .bg-amber-50 {
+  background-color: rgba(245, 158, 11, 0.14) !important;
+}
+
+html.dark .bg-orange-50 {
+  background-color: rgba(249, 115, 22, 0.14) !important;
+}
+
+html.dark .bg-rose-50 {
+  background-color: rgba(244, 63, 94, 0.14) !important;
+}
+
+html.dark .bg-teal-50 {
+  background-color: rgba(20, 184, 166, 0.14) !important;
+}
+
+html.dark .bg-teal-100 {
+  background-color: rgba(20, 184, 166, 0.18) !important;
+}
+
+html.dark .bg-purple-50 {
+  background-color: rgba(168, 85, 247, 0.14) !important;
+}
+
+html.dark .bg-fuchsia-100 {
+  background-color: rgba(217, 70, 239, 0.18) !important;
+}
+
+html.dark .bg-stone-100,
+html.dark .bg-stone-200 {
+  background-color: #111827 !important;
+}
+
+/* Make "accent text" utilities readable on tinted dark cards */
+html.dark .text-emerald-700 {
+  color: #6ee7b7 !important;
+}
+
+html.dark .text-emerald-600 {
+  color: #34d399 !important;
+}
+
+html.dark .text-indigo-700 {
+  color: #c7d2fe !important;
+}
+
+html.dark .text-indigo-600 {
+  color: #a5b4fc !important;
+}
+
+html.dark .text-sky-700 {
+  color: #bae6fd !important;
+}
+
+html.dark .text-sky-600 {
+  color: #7dd3fc !important;
+}
+
+html.dark .text-cyan-700 {
+  color: #a5f3fc !important;
+}
+
+html.dark .text-cyan-600 {
+  color: #67e8f9 !important;
+}
+
+html.dark .text-blue-700 {
+  color: #bfdbfe !important;
+}
+
+html.dark .text-blue-600 {
+  color: #93c5fd !important;
+}
+
+html.dark .text-amber-700 {
+  color: #fde68a !important;
+}
+
+html.dark .text-amber-600 {
+  color: #fcd34d !important;
+}
+
+html.dark .text-orange-700 {
+  color: #fed7aa !important;
+}
+
+html.dark .text-orange-600 {
+  color: #fdba74 !important;
+}
+
+html.dark .text-rose-700 {
+  color: #fecdd3 !important;
+}
+
+html.dark .text-rose-600 {
+  color: #fda4af !important;
+}
+
+html.dark .text-teal-700 {
+  color: #99f6e4 !important;
+}
+
+html.dark .text-teal-600 {
+  color: #5eead4 !important;
+}
+
+html.dark .text-purple-700 {
+  color: #e9d5ff !important;
+}
+
+html.dark .text-purple-600 {
+  color: #d8b4fe !important;
+}
+
+html.dark .text-fuchsia-700 {
+  color: #f5d0fe !important;
+}
+
+html.dark .text-fuchsia-600 {
+  color: #f0abfc !important;
+}
 html.dark .setup-chip {
   background-color: #1e293b !important;
   border-color: #334155 !important;
