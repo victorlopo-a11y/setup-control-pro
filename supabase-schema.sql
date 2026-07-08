@@ -11,6 +11,91 @@ create table if not exists public.users (
   created_at timestamptz not null default now()
 );
 
+-- Mantém o perfil público sincronizado com o Supabase Auth.
+create or replace function public.sync_auth_user_profile()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  resolved_email text;
+  resolved_name text;
+  resolved_role text;
+begin
+  resolved_email := lower(coalesce(new.email, ''));
+  resolved_name := coalesce(
+    nullif(new.raw_user_meta_data ->> 'full_name', ''),
+    nullif(new.raw_user_meta_data ->> 'name', ''),
+    nullif(split_part(resolved_email, '@', 1), ''),
+    'Usuario'
+  );
+
+  if resolved_email in (
+    'victor.lopo@grupomultilaser.com.br',
+    'victorlopo77@gmail.com',
+    'victorlopo777@gmail.com',
+    'devsistemasetup@gmail.com.br'
+  ) then
+    resolved_role := 'DEV_ADMIN';
+  else
+    resolved_role := coalesce(nullif(new.raw_user_meta_data ->> 'role', ''), 'PRODUCAO');
+    if resolved_role not in (
+      'PRODUCAO', 'QUALIDADE', 'AREA_KIT', 'PCP', 'ENGENHARIA_SETUP',
+      'ENGENHARIA_TESTE', 'ENGENHARIA_AUTOMACAO', 'ENGENHARIA_PROCESSO',
+      'ALMOXERIFADO', 'DEV_ADMIN'
+    ) then
+      resolved_role := 'PRODUCAO';
+    end if;
+  end if;
+
+  insert into public.users (id, email, display_name, role)
+  values (new.id, resolved_email, resolved_name, resolved_role)
+  on conflict (id) do update
+    set email = excluded.email,
+        display_name = excluded.display_name,
+        role = excluded.role;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_sync_auth_user_profile on auth.users;
+create trigger trg_sync_auth_user_profile
+after insert or update of email, raw_user_meta_data on auth.users
+for each row execute function public.sync_auth_user_profile();
+
+-- Inclui contas já criadas antes da instalação do trigger.
+insert into public.users (id, email, display_name, role)
+select
+  au.id,
+  lower(coalesce(au.email, '')),
+  coalesce(
+    nullif(au.raw_user_meta_data ->> 'full_name', ''),
+    nullif(au.raw_user_meta_data ->> 'name', ''),
+    nullif(split_part(lower(coalesce(au.email, '')), '@', 1), ''),
+    'Usuario'
+  ),
+  case
+    when lower(coalesce(au.email, '')) in (
+      'victor.lopo@grupomultilaser.com.br',
+      'victorlopo77@gmail.com',
+      'victorlopo777@gmail.com',
+      'devsistemasetup@gmail.com.br'
+    ) then 'DEV_ADMIN'
+    when au.raw_user_meta_data ->> 'role' in (
+      'PRODUCAO', 'QUALIDADE', 'AREA_KIT', 'PCP', 'ENGENHARIA_SETUP',
+      'ENGENHARIA_TESTE', 'ENGENHARIA_AUTOMACAO', 'ENGENHARIA_PROCESSO',
+      'ALMOXERIFADO', 'DEV_ADMIN'
+    ) then au.raw_user_meta_data ->> 'role'
+    else 'PRODUCAO'
+  end
+from auth.users au
+on conflict (id) do update
+  set email = excluded.email,
+      display_name = excluded.display_name,
+      role = excluded.role;
+
 create table if not exists public.setup_requests (
   id uuid primary key default gen_random_uuid(),
   line text not null,
@@ -304,7 +389,7 @@ begin
   jwt_role := coalesce(nullif(jwt_role, ''), auth.jwt() -> 'user_metadata' ->> 'role');
   jwt_email := lower(coalesce(auth.jwt() ->> 'email', ''));
 
-  if jwt_email in ('victor.lopo@grupomultilaser.com.br', 'victorlopo77@gmail.com', 'devsistemasetup@gmail.com.br') then
+  if jwt_email in ('victor.lopo@grupomultilaser.com.br', 'victorlopo77@gmail.com', 'victorlopo777@gmail.com', 'devsistemasetup@gmail.com.br') then
     jwt_role := 'DEV_ADMIN';
   end if;
 
@@ -543,7 +628,7 @@ create policy "setup_requests_delete_dev_only"
   for delete
   to authenticated
   using (
-    lower(auth.jwt() ->> 'email') in ('victor.lopo@grupomultilaser.com.br', 'victorlopo77@gmail.com')
+    lower(auth.jwt() ->> 'email') in ('victor.lopo@grupomultilaser.com.br', 'victorlopo77@gmail.com', 'victorlopo777@gmail.com')
     or exists (
       select 1
       from public.users u
@@ -675,7 +760,7 @@ create policy "oppo_requests_delete_dev_only"
   for delete
   to authenticated
   using (
-    lower(auth.jwt() ->> 'email') in ('victor.lopo@grupomultilaser.com.br', 'victorlopo77@gmail.com', 'devsistemasetup@gmail.com.br')
+    lower(auth.jwt() ->> 'email') in ('victor.lopo@grupomultilaser.com.br', 'victorlopo77@gmail.com', 'victorlopo777@gmail.com', 'devsistemasetup@gmail.com.br')
     or exists (
       select 1
       from public.users u
@@ -820,7 +905,7 @@ create policy "oppo_setup_requests_delete_dev_only"
   for delete
   to authenticated
   using (
-    lower(auth.jwt() ->> 'email') in ('victor.lopo@grupomultilaser.com.br', 'victorlopo77@gmail.com', 'devsistemasetup@gmail.com.br')
+    lower(auth.jwt() ->> 'email') in ('victor.lopo@grupomultilaser.com.br', 'victorlopo77@gmail.com', 'victorlopo777@gmail.com', 'devsistemasetup@gmail.com.br')
     or exists (
       select 1
       from public.users u

@@ -883,6 +883,7 @@ const ROLE_OPTIONS: { id: UserRole; label: string; icon: any; color: string }[] 
 const DEV_ADMIN_EMAILS = new Set([
   'victor.lopo@grupomultilaser.com.br',
   'victorlopo77@gmail.com',
+  'victorlopo777@gmail.com',
   'devsistemasetup@gmail.com.br',
 ]);
 const isDevAdminEmail = (email?: string) => !!email && DEV_ADMIN_EMAILS.has(email.trim().toLowerCase());
