@@ -118,8 +118,8 @@ create table if not exists public.oppo_setup_requests (
   cancelled_at timestamptz
 );
 
--- Quando o PCP abre uma solicitação de setup (PCP -> Eng. Processo),
--- cria automaticamente um chamado no Almoxerifado para iniciar a separação/conferência.
+-- Quando o PCP abre uma solicitação de setup (PCP -> Eng. Processo e Eng. Teste),
+-- cria automaticamente os chamados no Almoxerifado para iniciar a separação/conferência por setor.
 create or replace function public.oppo_setup_create_almox_request()
 returns trigger
 language plpgsql
@@ -157,6 +157,7 @@ begin
     now(),
     '[SETUP_SESSION:' || new.session_id || '] [SETUP_TARGET_ROLE:' || new.target_role || '] [SETUP_OP:' || coalesce(new.production_order,'') || '] Solicitação automática de materiais para setup.'
   );
+
   return new;
 exception when others then
   -- não bloqueia a criação do setup se a automação falhar
@@ -164,11 +165,119 @@ exception when others then
 end;
 $$;
 
+-- -----------------------------------------------------------------------------
+-- Insert safety: set `created_by` automatically (avoids RLS 42501)
+-- -----------------------------------------------------------------------------
+create or replace function public._set_created_by_defaults()
+returns trigger
+language plpgsql
+as $$
+declare
+  user_id uuid;
+begin
+  user_id := auth.uid();
+  if user_id is null then
+    return new;
+  end if;
+
+  if new.created_by is null or new.created_by <> user_id then
+    new.created_by := user_id;
+  end if;
+
+  if new.created_by_name is null or btrim(new.created_by_name) = '' then
+    select coalesce(u.display_name, u.email, 'Usuario')
+      into new.created_by_name
+      from public.users u
+     where u.id = user_id;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_setup_requests_set_created_by on public.setup_requests;
+create trigger trg_setup_requests_set_created_by
+before insert on public.setup_requests
+for each row execute function public._set_created_by_defaults();
+
+drop trigger if exists trg_oppo_requests_set_created_by on public.oppo_requests;
+create trigger trg_oppo_requests_set_created_by
+before insert on public.oppo_requests
+for each row execute function public._set_created_by_defaults();
+
+drop trigger if exists trg_oppo_setup_requests_set_created_by on public.oppo_setup_requests;
+create trigger trg_oppo_setup_requests_set_created_by
+before insert on public.oppo_setup_requests
+for each row execute function public._set_created_by_defaults();
+
 drop trigger if exists trg_oppo_setup_create_almox_request on public.oppo_setup_requests;
 create trigger trg_oppo_setup_create_almox_request
 after insert on public.oppo_setup_requests
 for each row
 execute function public.oppo_setup_create_almox_request();
+
+-- Backfill: setups antigos criados apenas para Processo devem ganhar o par de Teste.
+insert into public.oppo_setup_requests (
+  line,
+  product,
+  line_type,
+  production_order,
+  target_role,
+  status,
+  session_id,
+  created_by,
+  created_by_name,
+  created_at
+)
+select
+  p.line,
+  p.product,
+  p.line_type,
+  p.production_order,
+  'ENGENHARIA_TESTE',
+  'PENDING_PROCESSO',
+  p.session_id,
+  p.created_by,
+  p.created_by_name,
+  p.created_at
+from public.oppo_setup_requests p
+where p.target_role = 'ENGENHARIA_PROCESSO'
+  and not exists (
+    select 1
+    from public.oppo_setup_requests t
+    where t.session_id = p.session_id
+      and t.target_role = 'ENGENHARIA_TESTE'
+  );
+
+-- Backfill: garante chamado do Almoxerifado para cada setor da solicitação de setup.
+insert into public.oppo_requests (
+  call_type,
+  status,
+  line,
+  product,
+  line_type,
+  created_by,
+  created_by_name,
+  requested_at,
+  notes
+)
+select
+  'SOLICITACAO_DISPOSITIVO',
+  'ABERTO',
+  s.line,
+  s.product,
+  s.line_type,
+  s.created_by,
+  s.created_by_name,
+  now(),
+  '[SETUP_SESSION:' || s.session_id || '] [SETUP_TARGET_ROLE:' || s.target_role || '] [SETUP_OP:' || coalesce(s.production_order,'') || '] Solicitação automática de materiais para setup.'
+from public.oppo_setup_requests s
+where not exists (
+  select 1
+  from public.oppo_requests r
+  where r.call_type = 'SOLICITACAO_DISPOSITIVO'
+    and r.notes like ('[SETUP_SESSION:' || s.session_id || '] [SETUP_TARGET_ROLE:' || s.target_role || ']%')
+);
 
 -- RPC: Upsert de layouts por setor (workaround para instabilidades no PostgREST upsert)
 create or replace function public.upsert_oppo_setup_layout(
@@ -185,8 +294,19 @@ set search_path = public
 as $$
 declare
   jwt_role text;
+  jwt_email text;
 begin
-  jwt_role := auth.jwt() -> 'user_metadata' ->> 'role';
+  select u.role
+    into jwt_role
+    from public.users u
+   where u.id = auth.uid();
+
+  jwt_role := coalesce(nullif(jwt_role, ''), auth.jwt() -> 'user_metadata' ->> 'role');
+  jwt_email := lower(coalesce(auth.jwt() ->> 'email', ''));
+
+  if jwt_email in ('victor.lopo@grupomultilaser.com.br', 'victorlopo77@gmail.com', 'devsistemasetup@gmail.com.br') then
+    jwt_role := 'DEV_ADMIN';
+  end if;
 
   if jwt_role is null or jwt_role = '' then
     raise exception 'Unauthorized';
@@ -288,6 +408,11 @@ alter table public.oppo_requests add column if not exists return_items_selected 
 alter table public.oppo_requests add column if not exists paid_items_selected jsonb not null default '[]'::jsonb;
 alter table public.oppo_requests add column if not exists paid_items_note text;
 alter table public.oppo_requests add column if not exists notes text;
+
+-- Garante que inserts antigos e novos sempre recebam uma PK UUID válida.
+-- O frontend também envia o UUID, mas o default protege triggers e clientes legados.
+alter table public.oppo_requests alter column id set default gen_random_uuid();
+alter table public.oppo_requests alter column id set not null;
 
 create table if not exists public.oppo_setup_layouts (
   product_key text not null,
@@ -401,7 +526,8 @@ create policy "setup_requests_insert_authenticated"
   on public.setup_requests
   for insert
   to authenticated
-  with check (auth.uid() = created_by);
+  -- `created_by` is set in a BEFORE INSERT trigger; allow the insert as long as the user is authenticated.
+  with check (auth.uid() is not null);
 
 drop policy if exists "setup_requests_update_authenticated" on public.setup_requests;
 create policy "setup_requests_update_authenticated"
@@ -417,7 +543,7 @@ create policy "setup_requests_delete_dev_only"
   for delete
   to authenticated
   using (
-    lower(auth.jwt() ->> 'email') in ('victor.lopo@grupomultilaser.com.br')
+    lower(auth.jwt() ->> 'email') in ('victor.lopo@grupomultilaser.com.br', 'victorlopo77@gmail.com')
     or exists (
       select 1
       from public.users u
@@ -469,7 +595,8 @@ create policy "oppo_requests_insert_authenticated"
   on public.oppo_requests
   for insert
   to authenticated
-  with check (auth.uid() = created_by);
+  -- `created_by` is set in a BEFORE INSERT trigger; allow the insert as long as the user is authenticated.
+  with check (auth.uid() is not null);
 
 drop policy if exists "oppo_requests_update_authenticated" on public.oppo_requests;
 create policy "oppo_requests_update_authenticated"
@@ -548,7 +675,7 @@ create policy "oppo_requests_delete_dev_only"
   for delete
   to authenticated
   using (
-    lower(auth.jwt() ->> 'email') in ('victor.lopo@grupomultilaser.com.br', 'devsistemasetup@gmail.com.br')
+    lower(auth.jwt() ->> 'email') in ('victor.lopo@grupomultilaser.com.br', 'victorlopo77@gmail.com', 'devsistemasetup@gmail.com.br')
     or exists (
       select 1
       from public.users u
@@ -624,7 +751,8 @@ create policy "oppo_setup_requests_insert_authenticated"
   on public.oppo_setup_requests
   for insert
   to authenticated
-  with check (auth.uid() = created_by);
+  -- `created_by` is set in a BEFORE INSERT trigger; allow the insert as long as the user is authenticated.
+  with check (auth.uid() is not null);
 
 drop policy if exists "oppo_setup_requests_update_authenticated" on public.oppo_setup_requests;
 create policy "oppo_setup_requests_update_authenticated"
@@ -683,5 +811,20 @@ create policy "oppo_setup_requests_update_authenticated"
           and u.role = 'ENGENHARIA_TESTE'
       )
       and target_role = 'ENGENHARIA_TESTE'
+    )
+  );
+
+drop policy if exists "oppo_setup_requests_delete_dev_only" on public.oppo_setup_requests;
+create policy "oppo_setup_requests_delete_dev_only"
+  on public.oppo_setup_requests
+  for delete
+  to authenticated
+  using (
+    lower(auth.jwt() ->> 'email') in ('victor.lopo@grupomultilaser.com.br', 'victorlopo77@gmail.com', 'devsistemasetup@gmail.com.br')
+    or exists (
+      select 1
+      from public.users u
+      where u.id = auth.uid()
+        and u.role = 'DEV_ADMIN'
     )
   );

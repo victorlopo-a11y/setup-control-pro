@@ -21,16 +21,22 @@ View your app in AI Studio: https://ai.studio/apps/88cae728-7ea5-4ec0-8cc3-3b8a1
    - `VITE_SUPABASE_ANON_KEY`
 4. Run SQL schema in Supabase SQL editor:
    - `supabase-schema.sql`
+   - Para trocar por um projeto limpo, siga `docs/NEW_DATABASE_SETUP.md`.
+   - If you already ran it before and still gets errors like `row-level security policy` (code 42501), re-run it to apply the latest RLS policies/triggers.
+   - For a clean database migration, follow `docs/DATABASE_MIGRATION.md`.
 5. In Supabase Auth > Providers, enable `Google`
 6. In Supabase Auth > URL Configuration, add:
    - `http://localhost:3000` as Site URL
    - `http://localhost:3000` in Redirect URLs
 7. In Supabase Dashboard, allow your dev origin for the **Data API (REST)** (CORS):
    - Add `http://127.0.0.1:3000` and `http://localhost:3000` in the Data API / CORS Allowed Origins settings
-   - If you use the Vite local proxy (`VITE_SUPABASE_PROXY="true"`), this step is optional, but direct mode is usually more stable.
+   - If you use the Vite local proxy (`VITE_SUPABASE_PROXY="true"`), this step is optional (CORS won't apply), but direct mode is usually more stable.
 8. (Optional) Set `GEMINI_API_KEY` in `.env.local` if using Gemini features
 9. Run the app:
    `npm run dev`
+
+10. Verifique a conexão e as tabelas:
+    `npm run db:verify`
 
 ## Supabase Keepalive (anti-pausa por inatividade)
 

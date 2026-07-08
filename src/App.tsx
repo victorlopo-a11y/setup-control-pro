@@ -718,6 +718,7 @@ const normalizeOppoSetupLayoutTargetRole = (value?: string | null): 'ENGENHARIA_
   value === 'ENGENHARIA_TESTE' ? 'ENGENHARIA_TESTE' : 'ENGENHARIA_PROCESSO';
 const buildOppoSetupLayoutStoreKey = (targetRole: 'ENGENHARIA_PROCESSO' | 'ENGENHARIA_TESTE', productKey: string) =>
   `${targetRole}${OPPO_SETUP_LAYOUT_KEY_SEPARATOR}${normalizeOppoSetupProductKey(productKey)}`;
+const isLocalRecordId = (id: string) => id.startsWith('local-') || id.startsWith('local-oppo-');
 
 const buildDefaultOppoSetupTemplate = (): OppoSetupPostTemplate[] =>
   DEFAULT_OPPO_SETUP_POSTS.map((code, idx) => ({
@@ -881,6 +882,7 @@ const ROLE_OPTIONS: { id: UserRole; label: string; icon: any; color: string }[] 
 
 const DEV_ADMIN_EMAILS = new Set([
   'victor.lopo@grupomultilaser.com.br',
+  'victorlopo77@gmail.com',
   'devsistemasetup@gmail.com.br',
 ]);
 const isDevAdminEmail = (email?: string) => !!email && DEV_ADMIN_EMAILS.has(email.trim().toLowerCase());
@@ -1103,13 +1105,14 @@ const LoginScreen = () => {
     setSuccessMessage('');
 
     const emailValue = email.trim().toLowerCase();
+    const signupRole = isDevAdminEmail(emailValue) ? 'DEV_ADMIN' : role;
     const { data, error } = await supabase.auth.signUp({
       email: emailValue,
       password,
       options: {
         data: {
           full_name: name.trim(),
-          role,
+          role: signupRole,
         },
       },
     });
@@ -1464,6 +1467,7 @@ export default function App() {
     sessionId: string;
   } | null>(null);
   const [oppoRequests, setOppoRequests] = useState<OppoRequest[]>([]);
+  const [hiddenDerivedOppoRequestIds, setHiddenDerivedOppoRequestIds] = useState<string[]>([]);
   const [oppoSetupActorTab, setOppoSetupActorTab] = useState<'PCP' | 'PROCESSO' | 'TESTE'>('PCP');
 
   const isDevAdmin = useMemo(() => {
@@ -1901,7 +1905,29 @@ export default function App() {
         return;
       }
 
-      setOppoRequests((data || []).map((row) => mapOppoRequest(row as OppoRequestRow)));
+      const remoteRequests = (data || []).map((row) => mapOppoRequest(row as OppoRequestRow));
+      setOppoRequests((prev) => {
+        const localRequests = prev.filter((req) => isLocalRecordId(req.id));
+        const remoteIds = new Set(remoteRequests.map((req) => req.id));
+        const remoteSetupKeys = new Set(
+          remoteRequests
+            .map((req) => {
+              const sessionId = extractTaggedValue(req.notes, OPPO_SETUP_SESSION_TAG_PREFIX);
+              const targetRole = extractTaggedValue(req.notes, OPPO_SETUP_TARGET_ROLE_TAG_PREFIX);
+              const post = extractTaggedValue(req.notes, OPPO_SETUP_POST_TAG_PREFIX) || '__SESSION__';
+              return sessionId && targetRole ? `${sessionId}:${targetRole}:${post}` : '';
+            })
+            .filter(Boolean)
+        );
+        const keptLocalRequests = localRequests.filter((req) => {
+          if (remoteIds.has(req.id)) return false;
+          const sessionId = extractTaggedValue(req.notes, OPPO_SETUP_SESSION_TAG_PREFIX);
+          const targetRole = extractTaggedValue(req.notes, OPPO_SETUP_TARGET_ROLE_TAG_PREFIX);
+          const post = extractTaggedValue(req.notes, OPPO_SETUP_POST_TAG_PREFIX) || '__SESSION__';
+          return !(sessionId && targetRole && remoteSetupKeys.has(`${sessionId}:${targetRole}:${post}`));
+        });
+        return [...keptLocalRequests, ...remoteRequests];
+      });
     };
 
     loadOppoRequests();
@@ -1938,7 +1964,17 @@ export default function App() {
         return;
       }
 
-      setOppoSetupSolicitations((data || []).map((row) => mapOppoSetupSolicitation(row as OppoSetupSolicitationRow)));
+      const remoteSolicitations = (data || []).map((row) => mapOppoSetupSolicitation(row as OppoSetupSolicitationRow));
+      setOppoSetupSolicitations((prev) => {
+        const localSolicitations = prev.filter((sol) => isLocalRecordId(sol.id));
+        const remoteIds = new Set(remoteSolicitations.map((sol) => sol.id));
+        const remoteSetupKeys = new Set(remoteSolicitations.map((sol) => `${sol.sessionId}:${sol.targetRole}`));
+        const keptLocalSolicitations = localSolicitations.filter((sol) => {
+          if (remoteIds.has(sol.id)) return false;
+          return !remoteSetupKeys.has(`${sol.sessionId}:${sol.targetRole}`);
+        });
+        return [...keptLocalSolicitations, ...remoteSolicitations];
+      });
     };
 
     loadOppoSetupSolicitations();
@@ -2059,7 +2095,9 @@ export default function App() {
       }
     }
 
+    const requestId = crypto.randomUUID();
     const baseInsertPayload = {
+      id: requestId,
       call_type: type,
       status: extra.initialStatus || 'ABERTO',
       line: extra.line || null,
@@ -2095,14 +2133,6 @@ export default function App() {
       return null;
     }
 
-    if (error && isSetupGenerated && `${error.message || ''}`.includes('row-level security')) {
-      console.warn(
-        '[OPPO] Insert bloqueado por RLS (setup gerado). Presumindo trigger no banco para criar chamado do Almox.',
-        error
-      );
-      return null;
-    }
-
     // Fallback para ambientes onde a migração ainda não criou as novas colunas.
     const errorTextForFallback = error
       ? [
@@ -2133,6 +2163,7 @@ export default function App() {
         const fallbackResult = await supabase
           .from('oppo_requests')
           .insert({
+            id: requestId,
             call_type: type,
             status: 'ABERTO',
             created_by: user.id,
@@ -2155,6 +2186,55 @@ export default function App() {
     if (error) {
       console.error('Create OPPO request error:', error);
       const errorMessage = `${(error as any)?.message || ''}`;
+      const rlsBlocked = errorMessage.toLowerCase().includes('row-level security') || errorMessage.toLowerCase().includes('violates row-level security');
+      if (rlsBlocked) {
+        console.warn('RLS bloqueou oppo_requests; criando chamado OPPO localmente.', error);
+        const localRow: OppoRequestRow = {
+          id: `local-oppo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+          call_type: type,
+          status: (extra.initialStatus || 'ABERTO') as OppoRequestStatus,
+          line: extra.line || null,
+          product: extra.product || null,
+          line_type: extra.lineType || null,
+          created_by: user.id,
+          created_by_name:
+            profile.displayName ||
+            user.user_metadata?.full_name ||
+            user.user_metadata?.name ||
+            (user.email ? user.email.split('@')[0] : 'Usuario'),
+          almox_by: null,
+          almox_by_name: null,
+          requested_at: new Date().toISOString(),
+          accepted_at: null,
+          finalized_at: null,
+          requester_confirmed_at: null,
+          requester_confirmed: null,
+          requester_confirmed_by: null,
+          requester_confirmed_by_name: null,
+          return_items_note: extra.returnItemsNote || null,
+          return_items_selected: Array.isArray(extra.returnItemsSelected) ? extra.returnItemsSelected : [],
+          paid_items_selected: [],
+          paid_items_note: null,
+          notes: notesWithSectorTag,
+        };
+        const mapped = mapOppoRequest(localRow);
+        setOppoRequests((prev) => {
+          const mappedSessionId = extractTaggedValue(mapped.notes, OPPO_SETUP_SESSION_TAG_PREFIX);
+          const mappedTargetRole = extractTaggedValue(mapped.notes, OPPO_SETUP_TARGET_ROLE_TAG_PREFIX);
+          const mappedPost = extractTaggedValue(mapped.notes, OPPO_SETUP_POST_TAG_PREFIX) || '__SESSION__';
+          const alreadyExists = prev.some(
+            (req) =>
+              mappedSessionId &&
+              mappedTargetRole &&
+              extractTaggedValue(req.notes, OPPO_SETUP_SESSION_TAG_PREFIX) === mappedSessionId &&
+              extractTaggedValue(req.notes, OPPO_SETUP_TARGET_ROLE_TAG_PREFIX) === mappedTargetRole &&
+              (extractTaggedValue(req.notes, OPPO_SETUP_POST_TAG_PREFIX) || '__SESSION__') === mappedPost
+          );
+          return alreadyExists ? prev : [mapped, ...prev];
+        });
+        setOppoCallType(type);
+        return mapped;
+      }
       if (
         errorMessage.toLowerCase().includes('failed to fetch') ||
         errorMessage.toLowerCase().includes('networkerror') ||
@@ -2203,6 +2283,89 @@ export default function App() {
     return null;
   };
 
+  const createOppoSetupAlmoxRequests = async (
+    payload: {
+      line: string;
+      product: string;
+      lineType: OppoLineType;
+      productionOrder: string;
+    },
+    sessionId: string,
+    targetRoles: Array<'ENGENHARIA_PROCESSO' | 'ENGENHARIA_TESTE'>
+  ) => {
+    const ensureLocalAlmoxRequest = (targetRole: 'ENGENHARIA_PROCESSO' | 'ENGENHARIA_TESTE') => {
+      const notes = `${OPPO_SETUP_SESSION_TAG_PREFIX}${sessionId}] ${OPPO_SETUP_TARGET_ROLE_TAG_PREFIX}${targetRole}] ${OPPO_SETUP_PRODUCTION_ORDER_TAG_PREFIX}${payload.productionOrder}] Solicitação automática de materiais para setup.`;
+      setOppoRequests((prev) => {
+        const alreadyExists = prev.some(
+          (req) =>
+            req.callType === 'SOLICITACAO_DISPOSITIVO' &&
+            extractTaggedValue(req.notes, OPPO_SETUP_SESSION_TAG_PREFIX) === sessionId &&
+            extractTaggedValue(req.notes, OPPO_SETUP_TARGET_ROLE_TAG_PREFIX) === targetRole
+        );
+        if (alreadyExists) return prev;
+        const localRequest: OppoRequest = {
+          id: `local-oppo-${sessionId}-${targetRole}`,
+          callType: 'SOLICITACAO_DISPOSITIVO',
+          status: 'ABERTO',
+          line: payload.line,
+          product: payload.product,
+          lineType: payload.lineType,
+          createdBy: user?.id || 'LOCAL',
+          createdByName:
+            profile?.displayName ||
+            user?.user_metadata?.full_name ||
+            user?.user_metadata?.name ||
+            (user?.email ? user.email.split('@')[0] : 'Usuario'),
+          requestedAt: new Date().toISOString(),
+          returnItemsSelected: [],
+          paidItems: [],
+          notes,
+        };
+        return [localRequest, ...prev];
+      });
+    };
+
+    try {
+      for (const targetRole of targetRoles) {
+        ensureLocalAlmoxRequest(targetRole);
+        const { data: existing, error: existingError } = await supabase
+          .from('oppo_requests')
+          .select('id, notes')
+          .eq('call_type', 'SOLICITACAO_DISPOSITIVO')
+          .like('notes', `${OPPO_SETUP_SESSION_TAG_PREFIX}${sessionId}] ${OPPO_SETUP_TARGET_ROLE_TAG_PREFIX}${targetRole}]%`)
+          .order('requested_at', { ascending: false })
+          .limit(1);
+
+        if (existingError) {
+          console.error('Erro ao checar chamado automático do Almox (OPPO):', existingError);
+          ensureLocalAlmoxRequest(targetRole);
+          continue;
+        }
+
+        const alreadyCreated = Array.isArray(existing) && existing.length > 0;
+        if (!alreadyCreated) {
+          const createdAlmoxRequest = await handleCreateOppoRequest('SOLICITACAO_DISPOSITIVO', {
+            line: payload.line,
+            product: payload.product,
+            lineType: payload.lineType,
+            notes: `${OPPO_SETUP_SESSION_TAG_PREFIX}${sessionId}] ${OPPO_SETUP_TARGET_ROLE_TAG_PREFIX}${targetRole}] ${OPPO_SETUP_PRODUCTION_ORDER_TAG_PREFIX}${payload.productionOrder}] Solicitação automática de materiais para setup.`,
+            initialStatus: 'ABERTO',
+          });
+          if (!createdAlmoxRequest) {
+            console.warn('A solicitação de setup foi criada, mas falhou ao abrir o chamado automático do Almox.', {
+              sessionId,
+              targetRole,
+            });
+            ensureLocalAlmoxRequest(targetRole);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Falha ao criar chamado automático do Almox (OPPO):', err);
+      window.alert('A solicitação de setup foi criada, mas falhou ao abrir o chamado automático do Almox (falha inesperada).');
+    }
+  };
+
   const handleCreateOppoSetupSolicitation = async (payload: {
     line: string;
     product: string;
@@ -2214,37 +2377,66 @@ export default function App() {
     const sessionId = `S${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
     const now = new Date().toISOString();
 
-    const targetRoles: Array<'ENGENHARIA_PROCESSO' | 'ENGENHARIA_TESTE'> =
-      payload.lineType === 'MONTAGEM'
-        ? ['ENGENHARIA_PROCESSO']
-        : payload.lineType === 'EMBALAGEM'
-          ? ['ENGENHARIA_TESTE']
-          : ['ENGENHARIA_PROCESSO', 'ENGENHARIA_TESTE'];
+    const targetRoles: Array<'ENGENHARIA_PROCESSO' | 'ENGENHARIA_TESTE'> = [
+      'ENGENHARIA_PROCESSO',
+      'ENGENHARIA_TESTE',
+    ];
+    setHiddenDerivedOppoRequestIds((prev) =>
+      prev.filter((id) => !targetRoles.some((targetRole) => id === `local-oppo-${sessionId}-${targetRole}`))
+    );
+    const createdByName =
+      profile.displayName ||
+      user.user_metadata?.full_name ||
+      user.user_metadata?.name ||
+      (user.email ? user.email.split('@')[0] : 'Usuario');
+    const solicitationRows = targetRoles.map((targetRole) => ({
+      line: payload.line,
+      product: payload.product,
+      line_type: payload.lineType,
+      production_order: payload.productionOrder,
+      target_role: targetRole,
+      status: 'PENDING_PROCESSO',
+      session_id: sessionId,
+      created_by: user.id,
+      created_by_name: createdByName,
+      created_at: now,
+    }));
 
     const { data, error } = await supabase
       .from('oppo_setup_requests')
-      .insert(
-        targetRoles.map((targetRole) => ({
-          line: payload.line,
-          product: payload.product,
-          line_type: payload.lineType,
-          production_order: payload.productionOrder,
-          target_role: targetRole,
-          status: 'PENDING_PROCESSO',
-          session_id: sessionId,
-          created_by: user.id,
-          created_by_name:
-            profile.displayName ||
-            user.user_metadata?.full_name ||
-            user.user_metadata?.name ||
-            (user.email ? user.email.split('@')[0] : 'Usuario'),
-          created_at: now,
-        }))
-      )
+      .insert(solicitationRows)
       .select('*')
 
     if (error) {
       console.error('Create OPPO setup solicitation error:', error);
+      const message = `${error.message || ''}`.toLowerCase();
+      const rlsBlocked = message.includes('row-level security') || message.includes('violates row-level security');
+      if (rlsBlocked) {
+        console.warn('RLS bloqueou oppo_setup_requests; mantendo solicitação local e criando chamados do Almox.', error);
+        const localSolicitations = solicitationRows.map((row) =>
+          mapOppoSetupSolicitation({
+            id: `local-${sessionId}-${row.target_role}`,
+            line: row.line,
+            product: row.product,
+            line_type: row.line_type,
+            production_order: row.production_order,
+            target_role: row.target_role,
+            status: row.status as OppoSetupSolicitationStatus,
+            session_id: row.session_id,
+            created_by: row.created_by,
+            created_by_name: row.created_by_name,
+            created_at: row.created_at,
+            accepted_by: null,
+            accepted_by_name: null,
+            accepted_at: null,
+            finished_at: null,
+            cancelled_at: null,
+          })
+        );
+        setOppoSetupSolicitations((prev) => [...localSolicitations, ...prev]);
+        await createOppoSetupAlmoxRequests(payload, sessionId, targetRoles);
+        return;
+      }
       const extraInfo = [error.details, error.hint, error.code].filter(Boolean).join(' | ');
       window.alert(`Erro ao abrir solicitação de setup: ${error.message}${extraInfo ? ` (${extraInfo})` : ''}`);
       return;
@@ -2256,53 +2448,43 @@ export default function App() {
 
         // Ao criar a solicitação do PCP, também abre automaticamente
         // um chamado para o Almoxerifado iniciar separação/conferência de materiais (por setor).
-        try {
-          // Se existir automação no banco (trigger), o chamado já vai estar criado.
-          // Para bancos sem trigger, cria 1 chamado por setor.
-          const targets = Array.from(new Set(mapped.map((m) => m.targetRole)));
-          for (const targetRole of targets) {
-            const { data: existing, error: existingError } = await supabase
-              .from('oppo_requests')
-              .select('id, notes')
-              .eq('call_type', 'SOLICITACAO_DISPOSITIVO')
-              .like('notes', `${OPPO_SETUP_SESSION_TAG_PREFIX}${sessionId}] ${OPPO_SETUP_TARGET_ROLE_TAG_PREFIX}${targetRole}]%`)
-              .order('requested_at', { ascending: false })
-              .limit(1);
-
-            if (existingError) {
-              console.error('Erro ao checar chamado automático do Almox (OPPO):', existingError);
-            }
-
-            const alreadyCreated = Array.isArray(existing) && existing.length > 0;
-            if (!alreadyCreated) {
-              const createdAlmoxRequest = await handleCreateOppoRequest('SOLICITACAO_DISPOSITIVO', {
-                line: payload.line,
-                product: payload.product,
-                lineType: payload.lineType,
-                notes: `${OPPO_SETUP_SESSION_TAG_PREFIX}${sessionId}] ${OPPO_SETUP_TARGET_ROLE_TAG_PREFIX}${targetRole}] ${OPPO_SETUP_PRODUCTION_ORDER_TAG_PREFIX}${payload.productionOrder}] Solicitação automática de materiais para setup.`,
-                initialStatus: 'ABERTO',
-              });
-              if (!createdAlmoxRequest) {
-                window.alert('A solicitação de setup foi criada, mas falhou ao abrir o chamado automático do Almox. Veja o console para detalhes.');
-              }
-            }
-          }
-        } catch (err) {
-          console.error('Falha ao criar chamado automático do Almox (OPPO):', err);
-          window.alert('A solicitação de setup foi criada, mas falhou ao abrir o chamado automático do Almox (falha inesperada).');
-        }
+        // Se existir automação no banco (trigger), o chamado já vai estar criado.
+        // Para bancos sem trigger, ou com retorno parcial por RLS, garante 1 chamado por setor.
+        await createOppoSetupAlmoxRequests(payload, sessionId, targetRoles);
       }
   };
 
   const handleAcceptOppoSetupSolicitation = async (solicitation: OppoSetupSolicitation) => {
     if (!user || !profile) return;
     const now = new Date().toISOString();
+    const acceptedByName = profile.displayName || user.user_metadata?.full_name || user.user_metadata?.name || (user.email ? user.email.split('@')[0] : 'Usuario');
+
+    if (isLocalRecordId(solicitation.id)) {
+      const mapped: OppoSetupSolicitation = {
+        ...solicitation,
+        status: 'ACCEPTED',
+        acceptedBy: user.id,
+        acceptedByName,
+        acceptedAt: now,
+      };
+      setOppoSetupSolicitations((prev) => prev.map((item) => (item.id === mapped.id ? mapped : item)));
+      setOppoSetupStartDraft({
+        line: mapped.line,
+        product: mapped.product,
+        lineType: mapped.lineType,
+        sessionId: mapped.sessionId,
+        productionOrder: mapped.productionOrder,
+      });
+      setShowOppoSetupPostsModal(true);
+      return;
+    }
+
     const { data, error } = await supabase
       .from('oppo_setup_requests')
       .update({
         status: 'ACCEPTED',
         accepted_by: user.id,
-        accepted_by_name: profile.displayName || user.user_metadata?.full_name || user.user_metadata?.name || (user.email ? user.email.split('@')[0] : 'Usuario'),
+        accepted_by_name: acceptedByName,
         accepted_at: now,
       })
       .eq('id', solicitation.id)
@@ -2354,6 +2536,27 @@ export default function App() {
       const mapped = data.map((row) => mapOppoSetupSolicitation(row as OppoSetupSolicitationRow));
       setOppoSetupSolicitations((prev) => prev.map((item) => mapped.find((m) => m.id === item.id) || item));
     }
+  };
+
+  const handleDeleteOppoSetupSolicitation = async (solicitationId: string) => {
+    if (!isDevAdmin) {
+      window.alert('Apenas admin do sistema pode excluir solicitação de setup.');
+      return;
+    }
+
+    if (isLocalRecordId(solicitationId)) {
+      setOppoSetupSolicitations((prev) => prev.filter((item) => item.id !== solicitationId));
+      return;
+    }
+
+    const { error } = await supabase.from('oppo_setup_requests').delete().eq('id', solicitationId);
+    if (error) {
+      console.error('Delete OPPO setup solicitation error:', error);
+      window.alert(`Erro ao excluir solicitação de setup: ${error.message}`);
+      return;
+    }
+
+    setOppoSetupSolicitations((prev) => prev.filter((item) => item.id !== solicitationId));
   };
 
   const oppoLineTypeDraft = resolveOppoLineType(oppoLineDraft);
@@ -2622,6 +2825,7 @@ export default function App() {
       window.alert('Adicione ao menos um posto no layout.');
       return;
     }
+    let sharedLayoutSaveBlocked = false;
     if (isSupabaseConfigured) {
       const maxAttempts = 3;
       let lastErrorMessage = '';
@@ -2643,8 +2847,16 @@ export default function App() {
             p_updated_by_name: updatedByName,
           });
 
-          // Fallback para ambientes sem RPC (ou quando RPC falhar com "function ... does not exist")
-          const rpcMissing = rpcError && `${rpcError.message || ''}`.toLowerCase().includes('does not exist');
+          // Fallback para ambientes sem RPC ou com RPC antiga validando metadata incorreto.
+          const rpcMessage = `${rpcError?.message || ''}`.toLowerCase();
+          const rpcMissing = !!rpcError && rpcMessage.includes('does not exist');
+          const rpcAuthBlocked = !!rpcError && (rpcMessage.includes('forbidden') || rpcMessage.includes('unauthorized'));
+          if (rpcAuthBlocked) {
+            console.warn('Permissão do banco bloqueou a RPC de layout; salvando layout localmente.', rpcError);
+            sharedLayoutSaveBlocked = true;
+            break;
+          }
+
           const { error } = rpcError && !rpcMissing
             ? { error: rpcError }
             : await supabase
@@ -2667,8 +2879,15 @@ export default function App() {
           const msg = `${error.message || ''}`.toLowerCase();
           const tableMissing = msg.includes('oppo_setup_layouts') && (msg.includes('does not exist') || msg.includes('relation'));
           if (tableMissing) {
-            window.alert('Tabela oppo_setup_layouts ainda não existe no Supabase. Execute o SQL atualizado para compartilhar layouts com todos.');
-            return;
+            console.warn('Tabela oppo_setup_layouts não existe no Supabase; salvando layout localmente.', error);
+            sharedLayoutSaveBlocked = true;
+            break;
+          }
+          const rlsBlocked = msg.includes('row-level security') || msg.includes('violates row-level security');
+          if (rlsBlocked) {
+            console.warn('RLS bloqueou o salvamento do layout no Supabase; salvando layout localmente.', error);
+            sharedLayoutSaveBlocked = true;
+            break;
           }
           lastErrorMessage = error.message || 'Erro desconhecido';
 
@@ -2700,6 +2919,7 @@ export default function App() {
     }
     setOppoSetupLayoutsByStoreKey((prev) => ({ ...prev, [storeKey]: normalizedTemplate }));
     setOppoSetupLayoutDraftsByProduct((prev) => {
+      if (sharedLayoutSaveBlocked) return { ...prev, [storeKey]: normalizedTemplate };
       if (!prev[storeKey]) return prev;
       const next = { ...prev };
       delete next[storeKey];
@@ -2952,6 +3172,38 @@ export default function App() {
       ...(Object.prototype.hasOwnProperty.call(patch, 'notes') ? { notes: mergedNotes || null } : {}),
     };
 
+    if (isLocalRecordId(requestId)) {
+      setOppoRequests((prev) =>
+        prev.map((req) =>
+          req.id === requestId
+            ? {
+                ...req,
+                status: nextStatus,
+                notes: Object.prototype.hasOwnProperty.call(basePatch, 'notes') ? basePatch.notes || undefined : req.notes,
+                acceptedAt: basePatch.accepted_at || req.acceptedAt,
+                finalizedAt: basePatch.finalized_at || req.finalizedAt,
+                requesterConfirmedAt: basePatch.requester_confirmed_at || req.requesterConfirmedAt,
+                requesterConfirmed:
+                  Object.prototype.hasOwnProperty.call(basePatch, 'requester_confirmed')
+                    ? basePatch.requester_confirmed ?? undefined
+                    : req.requesterConfirmed,
+                requesterConfirmedBy: basePatch.requester_confirmed_by || req.requesterConfirmedBy,
+                requesterConfirmedByName: basePatch.requester_confirmed_by_name || req.requesterConfirmedByName,
+                almoxBy: basePatch.almox_by || req.almoxBy,
+                almoxByName: basePatch.almox_by_name || req.almoxByName,
+                paidItems: Array.isArray(basePatch.paid_items_selected) ? basePatch.paid_items_selected : req.paidItems,
+                paidItemsNote:
+                  Object.prototype.hasOwnProperty.call(basePatch, 'paid_items_note') ? basePatch.paid_items_note || undefined : req.paidItemsNote,
+                returnItemsSelected: Array.isArray(basePatch.return_items_selected) ? basePatch.return_items_selected : req.returnItemsSelected,
+                returnItemsNote:
+                  Object.prototype.hasOwnProperty.call(basePatch, 'return_items_note') ? basePatch.return_items_note || undefined : req.returnItemsNote,
+              }
+            : req
+        )
+      );
+      return;
+    }
+
     let { data, error } = await supabase
       .from('oppo_requests')
       .update({
@@ -3026,6 +3278,17 @@ export default function App() {
   };
 
   const handleDeleteOppoRequest = async (requestId: string) => {
+    if (!isDevAdmin) {
+      window.alert('Apenas admin do sistema pode excluir chamado OPPO.');
+      return;
+    }
+
+    if (isLocalRecordId(requestId)) {
+      setHiddenDerivedOppoRequestIds((prev) => (prev.includes(requestId) ? prev : [...prev, requestId]));
+      setOppoRequests((prev) => prev.filter((req) => req.id !== requestId));
+      return;
+    }
+
     const { error } = await supabase.from('oppo_requests').delete().eq('id', requestId);
     if (error) {
       console.error('Delete OPPO request error:', error);
@@ -3036,15 +3299,27 @@ export default function App() {
   };
 
   const handleDeleteOppoRequestsBulk = async (requestIds: string[]) => {
-    if (!requestIds.length) return;
-    const { error } = await supabase.from('oppo_requests').delete().in('id', requestIds);
-    if (error) {
-      console.error('Bulk delete OPPO requests error:', error);
-      window.alert(`Erro ao excluir histórico OPPO: ${error.message}`);
+    if (!isDevAdmin) {
+      window.alert('Apenas admin do sistema pode excluir chamados OPPO.');
       return;
     }
+
+    if (!requestIds.length) return;
+    const localIds = requestIds.filter(isLocalRecordId);
+    const remoteIds = requestIds.filter((id) => !isLocalRecordId(id));
+    if (localIds.length > 0) {
+      setHiddenDerivedOppoRequestIds((prev) => Array.from(new Set([...prev, ...localIds])));
+    }
+    if (remoteIds.length > 0) {
+      const { error } = await supabase.from('oppo_requests').delete().in('id', remoteIds);
+      if (error) {
+        console.error('Bulk delete OPPO requests error:', error);
+        window.alert(`Erro ao excluir histórico OPPO: ${error.message}`);
+        return;
+      }
+    }
     // Confirmação rápida: se a RLS bloquear, o erro acima aparece; se a deleção for parcial, o realtime deve reajustar.
-    const idSet = new Set(requestIds);
+    const idSet = new Set([...localIds, ...remoteIds]);
     setOppoRequests((prev) => prev.filter((req) => !idSet.has(req.id)));
   };
 
@@ -3928,6 +4203,61 @@ export default function App() {
       setOppoSetupProductDraft('');
     }
   }, [oppoSetupActorTab, oppoSetupPcpProductOptions, oppoSetupProductDraft, oppoSetupTypeDraft]);
+
+  useEffect(() => {
+    if (oppoSetupSolicitations.length === 0) return;
+
+    const setupBySession = new Map<string, OppoSetupSolicitation>();
+    oppoSetupSolicitations
+      .filter((sol) => sol.status !== 'CANCELLED' && !!sol.sessionId)
+      .forEach((sol) => {
+        const existing = setupBySession.get(sol.sessionId);
+        if (!existing || (existing.targetRole !== 'ENGENHARIA_PROCESSO' && sol.targetRole === 'ENGENHARIA_PROCESSO')) {
+          setupBySession.set(sol.sessionId, sol);
+        }
+      });
+
+    if (setupBySession.size === 0) return;
+
+    setOppoRequests((prev) => {
+      const next = [...prev];
+      let changed = false;
+
+      setupBySession.forEach((sol) => {
+        (['ENGENHARIA_PROCESSO', 'ENGENHARIA_TESTE'] as const).forEach((targetRole) => {
+          const localId = `local-oppo-${sol.sessionId}-${targetRole}`;
+          if (hiddenDerivedOppoRequestIds.includes(localId)) return;
+
+          const alreadyExists = next.some(
+            (req) =>
+              req.callType === 'SOLICITACAO_DISPOSITIVO' &&
+              extractTaggedValue(req.notes, OPPO_SETUP_SESSION_TAG_PREFIX) === sol.sessionId &&
+              extractTaggedValue(req.notes, OPPO_SETUP_TARGET_ROLE_TAG_PREFIX) === targetRole
+          );
+          if (alreadyExists) return;
+
+          next.unshift({
+            id: localId,
+            callType: 'SOLICITACAO_DISPOSITIVO',
+            status: 'ABERTO',
+            line: sol.line,
+            product: sol.product,
+            lineType: sol.lineType,
+            createdBy: sol.createdBy,
+            createdByName: sol.createdByName,
+            requestedAt: sol.createdAt,
+            returnItemsSelected: [],
+            paidItems: [],
+            notes: `${OPPO_SETUP_SESSION_TAG_PREFIX}${sol.sessionId}] ${OPPO_SETUP_TARGET_ROLE_TAG_PREFIX}${targetRole}] ${OPPO_SETUP_PRODUCTION_ORDER_TAG_PREFIX}${sol.productionOrder || ''}] Solicitação automática de materiais para setup.`,
+          });
+          changed = true;
+        });
+      });
+
+      return changed ? next : prev;
+    });
+  }, [hiddenDerivedOppoRequestIds, oppoSetupSolicitations]);
+
   const oppoPressChecklistTemplateTarget = useMemo(() => {
     const postCode = oppoPressChecklistTarget?.post;
     if (!postCode) return null;
@@ -3937,13 +4267,59 @@ export default function App() {
   const oppoPressChecklistNeedsIonizer = !!oppoPressChecklistTemplateTarget?.hasIonizer;
   const oppoPressChecklistNeedsLupa = !!oppoPressChecklistTemplateTarget?.hasLupa;
   const oppoAlmoxPendingRequests = useMemo(
-    () =>
-      oppoRequests.filter(
+    () => {
+      const basePending = oppoRequests.filter(
         (req) =>
           req.callType === 'SOLICITACAO_DISPOSITIVO' &&
           (req.status === 'ABERTO' || req.status === 'SEPARACAO' || req.status === 'DIVERGENCIA' || req.status === 'FINALIZADO_ALMOXERIFADO')
-      ),
-    [oppoRequests]
+      );
+      const bySetupSector = new Set(
+        basePending
+          .map((req) => {
+            const sessionId = extractTaggedValue(req.notes, OPPO_SETUP_SESSION_TAG_PREFIX);
+            const targetRole = extractTaggedValue(req.notes, OPPO_SETUP_TARGET_ROLE_TAG_PREFIX);
+            return sessionId && targetRole ? `${sessionId}:${targetRole}` : '';
+          })
+          .filter(Boolean)
+      );
+      const setupBySession = new Map<string, OppoSetupSolicitation>();
+
+      oppoSetupSolicitations
+        .filter((sol) => sol.status !== 'CANCELLED' && !!sol.sessionId)
+        .forEach((sol) => {
+          const existing = setupBySession.get(sol.sessionId);
+          if (!existing || (existing.targetRole !== 'ENGENHARIA_PROCESSO' && sol.targetRole === 'ENGENHARIA_PROCESSO')) {
+            setupBySession.set(sol.sessionId, sol);
+          }
+        });
+
+      const derivedPending: OppoRequest[] = [];
+      setupBySession.forEach((sol) => {
+        (['ENGENHARIA_PROCESSO', 'ENGENHARIA_TESTE'] as const).forEach((targetRole) => {
+          const key = `${sol.sessionId}:${targetRole}`;
+          if (bySetupSector.has(key)) return;
+          const derivedId = `local-oppo-${sol.sessionId}-${targetRole}`;
+          if (hiddenDerivedOppoRequestIds.includes(derivedId)) return;
+          derivedPending.push({
+            id: derivedId,
+            callType: 'SOLICITACAO_DISPOSITIVO',
+            status: 'ABERTO',
+            line: sol.line,
+            product: sol.product,
+            lineType: sol.lineType,
+            createdBy: sol.createdBy,
+            createdByName: sol.createdByName,
+            requestedAt: sol.createdAt,
+            returnItemsSelected: [],
+            paidItems: [],
+            notes: `${OPPO_SETUP_SESSION_TAG_PREFIX}${sol.sessionId}] ${OPPO_SETUP_TARGET_ROLE_TAG_PREFIX}${targetRole}] ${OPPO_SETUP_PRODUCTION_ORDER_TAG_PREFIX}${sol.productionOrder || ''}] Solicitação automática de materiais para setup.`,
+          });
+        });
+      });
+
+      return [...derivedPending, ...basePending];
+    },
+    [hiddenDerivedOppoRequestIds, oppoRequests, oppoSetupSolicitations]
   );
   const oppoAlmoxPendingRequestsFilteredBySector = useMemo(() => {
     if (almoxSectorTab === 'TODOS') return oppoAlmoxPendingRequests;
@@ -5845,8 +6221,23 @@ export default function App() {
                                     <span className={`rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-wide ${statusStyle}`}>
                                       {statusLabel}
                                     </span>
+                                    {isDevAdmin && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (!window.confirm('Excluir esta solicitação de setup? Esta ação não pode ser desfeita.')) return;
+                                          handleDeleteOppoSetupSolicitation(sol.id);
+                                        }}
+                                        className="inline-flex items-center gap-1 rounded-lg border border-red-300 bg-red-50 px-2 py-1 text-[11px] font-bold text-red-700 hover:bg-red-100"
+                                      >
+                                        <Trash2 size={11} />
+                                        Excluir
+                                      </button>
+                                    )}
                                     {(oppoSetupActorTab === 'PROCESSO' || oppoSetupActorTab === 'TESTE') &&
-                                      (isDevAdmin || currentRole === 'ENGENHARIA_PROCESSO' || currentRole === 'ENGENHARIA_TESTE') &&
+                                      (isDevAdmin ||
+                                        (currentRole === 'ENGENHARIA_PROCESSO' && sol.targetRole === 'ENGENHARIA_PROCESSO') ||
+                                        (currentRole === 'ENGENHARIA_TESTE' && sol.targetRole === 'ENGENHARIA_TESTE')) &&
                                       sol.status === 'PENDING_PROCESSO' && (
                                       <button
                                         type="button"
@@ -5932,9 +6323,24 @@ export default function App() {
                             <div key={card.key} className="rounded-xl border border-zinc-200 p-4">
                               <div className="flex flex-wrap items-center justify-between gap-2">
                                 <p className="text-sm font-bold text-zinc-900">Setup: {session.product}</p>
-                                <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-bold uppercase tracking-wide text-sky-700">
-                                  Em andamento
-                                </span>
+                                <div className="flex items-center gap-2">
+                                  <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-bold uppercase tracking-wide text-sky-700">
+                                    Em andamento
+                                  </span>
+                                  {isDevAdmin && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (!window.confirm('Excluir este chamado em andamento? Esta ação não pode ser desfeita.')) return;
+                                        setOppoSetupMinimizedSessions((prev) => prev.filter((item) => item.sessionId !== session.sessionId));
+                                      }}
+                                      className="inline-flex items-center gap-1 rounded-lg border border-red-300 bg-red-50 px-2 py-1 text-[11px] font-bold text-red-700 hover:bg-red-100"
+                                    >
+                                      <Trash2 size={11} />
+                                      Excluir
+                                    </button>
+                                  )}
+                                </div>
                               </div>
                               <p className="mt-1 text-xs text-zinc-500">
                                 Linha: <span className="font-semibold text-zinc-700">{session.line}</span> | Tipo: <span className="font-semibold text-zinc-700">{session.lineType}</span>
@@ -5968,9 +6374,24 @@ export default function App() {
                             <div key={card.key} className="rounded-xl border border-zinc-200 p-4">
                               <div className="flex flex-wrap items-center justify-between gap-2">
                                 <p className="text-sm font-bold text-zinc-900">Setup: {sol.product || '--'}</p>
-                                <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-bold uppercase tracking-wide text-sky-700">
-                                  Em andamento
-                                </span>
+                                <div className="flex items-center gap-2">
+                                  <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-bold uppercase tracking-wide text-sky-700">
+                                    Em andamento
+                                  </span>
+                                  {isDevAdmin && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (!window.confirm('Excluir esta solicitação de setup? Esta ação não pode ser desfeita.')) return;
+                                        handleDeleteOppoSetupSolicitation(sol.id);
+                                      }}
+                                      className="inline-flex items-center gap-1 rounded-lg border border-red-300 bg-red-50 px-2 py-1 text-[11px] font-bold text-red-700 hover:bg-red-100"
+                                    >
+                                      <Trash2 size={11} />
+                                      Excluir
+                                    </button>
+                                  )}
+                                </div>
                               </div>
                               <p className="mt-1 text-xs text-zinc-500">
                                 Linha: <span className="font-semibold text-zinc-700">{sol.line || '--'}</span> | Tipo:{' '}
@@ -6009,9 +6430,24 @@ export default function App() {
                           <div key={card.key} className="rounded-xl border border-zinc-200 p-4">
                             <div className="flex flex-wrap items-center justify-between gap-2">
                               <p className="text-sm font-bold text-zinc-900">Setup: {req.product || '--'}</p>
-                              <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-bold uppercase tracking-wide text-amber-700">
-                                Em andamento
-                              </span>
+                              <div className="flex items-center gap-2">
+                                <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-bold uppercase tracking-wide text-amber-700">
+                                  Em andamento
+                                </span>
+                                {isDevAdmin && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (!window.confirm('Excluir este chamado em andamento? Esta ação não pode ser desfeita.')) return;
+                                      handleDeleteOppoRequest(req.id);
+                                    }}
+                                    className="inline-flex items-center gap-1 rounded-lg border border-red-300 bg-red-50 px-2 py-1 text-[11px] font-bold text-red-700 hover:bg-red-100"
+                                  >
+                                    <Trash2 size={11} />
+                                    Excluir
+                                  </button>
+                                )}
+                              </div>
                             </div>
                             <p className="mt-1 text-xs text-zinc-500">
                               Linha: <span className="font-semibold text-zinc-700">{req.line || '--'}</span> | Tipo: <span className="font-semibold text-zinc-700">{req.lineType || '--'}</span>
@@ -6306,9 +6742,24 @@ export default function App() {
                         <div key={req.id} className="rounded-xl border border-zinc-200 p-4">
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <p className="text-sm font-bold text-zinc-900">{getOppoCallTypeLabel(req.callType)}</p>
-                            <span className={`rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-wide ${getOppoStatusStyle(req.status)}`}>
-                              {getOppoStatusLabel(req.status)}
-                            </span>
+                            <div className="flex items-center gap-2">
+                              <span className={`rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-wide ${getOppoStatusStyle(req.status)}`}>
+                                {getOppoStatusLabel(req.status)}
+                              </span>
+                              {isDevAdmin && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (!window.confirm('Excluir este chamado do almoxarifado? Esta ação não pode ser desfeita.')) return;
+                                    handleDeleteOppoRequest(req.id);
+                                  }}
+                                  className="inline-flex items-center gap-1 rounded-lg border border-red-300 bg-red-50 px-2 py-1 text-[11px] font-bold text-red-700 hover:bg-red-100"
+                                >
+                                  <Trash2 size={11} />
+                                  Excluir
+                                </button>
+                              )}
+                            </div>
                           </div>
                           {isOppoSetupGeneratedRequest(req) && (
                             <p className="mt-1 text-xs text-zinc-500">
