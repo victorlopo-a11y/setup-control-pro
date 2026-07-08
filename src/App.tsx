@@ -1402,6 +1402,8 @@ export default function App() {
   const [showForm, setShowForm] = useState(false);
   const [showOppoCallTypeModal, setShowOppoCallTypeModal] = useState(false);
   const [showOppoSetupStartModal, setShowOppoSetupStartModal] = useState(false);
+  const [oppoSetupSubmissionSuccess, setOppoSetupSubmissionSuccess] = useState<string | null>(null);
+  const [isSubmittingOppoSetup, setIsSubmittingOppoSetup] = useState(false);
   const [showOppoSetupPostsModal, setShowOppoSetupPostsModal] = useState(false);
   const [showOppoSetupLayoutModal, setShowOppoSetupLayoutModal] = useState(false);
   const [showOppoSetupLayoutsListModal, setShowOppoSetupLayoutsListModal] = useState(false);
@@ -2373,7 +2375,7 @@ export default function App() {
     lineType: OppoLineType;
     productionOrder: string;
   }) => {
-    if (!user || !profile) return;
+    if (!user || !profile) return false;
 
     const sessionId = `S${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
     const now = new Date().toISOString();
@@ -2436,11 +2438,11 @@ export default function App() {
         );
         setOppoSetupSolicitations((prev) => [...localSolicitations, ...prev]);
         await createOppoSetupAlmoxRequests(payload, sessionId, targetRoles);
-        return;
+        return true;
       }
       const extraInfo = [error.details, error.hint, error.code].filter(Boolean).join(' | ');
       window.alert(`Erro ao abrir solicitação de setup: ${error.message}${extraInfo ? ` (${extraInfo})` : ''}`);
-      return;
+      return false;
     }
 
     if (Array.isArray(data) && data.length > 0) {
@@ -2452,7 +2454,9 @@ export default function App() {
         // Se existir automação no banco (trigger), o chamado já vai estar criado.
         // Para bancos sem trigger, ou com retorno parcial por RLS, garante 1 chamado por setor.
         await createOppoSetupAlmoxRequests(payload, sessionId, targetRoles);
+        return true;
       }
+    return false;
   };
 
   const handleAcceptOppoSetupSolicitation = async (solicitation: OppoSetupSolicitation) => {
@@ -7425,6 +7429,7 @@ export default function App() {
                 <button
                   onClick={() => {
                     setShowOppoSetupStartModal(false);
+                    setOppoSetupSubmissionSuccess(null);
                     setOppoSetupStartDraft(null);
                     setOppoSetupLineDraft('');
                     setOppoSetupProductDraft('');
@@ -7434,10 +7439,24 @@ export default function App() {
                   className="rounded-lg px-2 py-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
                   title="Fechar"
                 >
-                  <LogOut size={18} className="rotate-180" />
+                  <span className="text-2xl leading-none">×</span>
                 </button>
               </div>
 
+              {oppoSetupSubmissionSuccess ? (
+                <div className="flex min-h-40 flex-col items-center justify-center border-t border-zinc-100 px-2 py-8 text-center">
+                  <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50">
+                    <CheckCircle2 size={32} className="text-emerald-500" strokeWidth={2} />
+                  </div>
+                  <h4 className="text-xl font-bold text-zinc-900">Solicitação Enviada!</h4>
+                  <p className="mt-2 text-sm text-zinc-500">
+                    O chamado de setup para a OP{' '}
+                    <span className="font-black text-zinc-800">{oppoSetupSubmissionSuccess}</span>{' '}
+                    foi disparado com sucesso.
+                  </p>
+                </div>
+              ) : (
+                <>
                 <div className="space-y-3">
                 <div className="space-y-1">
                   <label className="text-sm font-bold text-zinc-700">Linha</label>
@@ -7531,7 +7550,8 @@ export default function App() {
                   Cancelar
                 </button>
                 <button
-                  onClick={() => {
+                  disabled={isSubmittingOppoSetup}
+                  onClick={async () => {
                     const product = oppoSetupProductDraft.trim();
                     const productionOrder = oppoSetupProductionOrderDraft.trim();
                     if (!oppoSetupLineDraft || !product || !oppoSetupTypeDraft) {
@@ -7544,13 +7564,16 @@ export default function App() {
                         window.alert('Preencha a Ordem de Produção.');
                         return;
                       }
-                      handleCreateOppoSetupSolicitation({
-                        line: oppoSetupLineDraft,
-                        product,
-                        lineType: oppoSetupTypeDraft,
-                        productionOrder,
-                      });
-                      setShowOppoSetupStartModal(false);
+                      setIsSubmittingOppoSetup(true);
+                      const created = await handleCreateOppoSetupSolicitation({
+                          line: oppoSetupLineDraft,
+                          product,
+                          lineType: oppoSetupTypeDraft,
+                          productionOrder,
+                        });
+                      setIsSubmittingOppoSetup(false);
+                      if (!created) return;
+                      setOppoSetupSubmissionSuccess(productionOrder);
                     } else {
                       setOppoSetupStartDraft({
                         line: oppoSetupLineDraft,
@@ -7567,11 +7590,17 @@ export default function App() {
                     setOppoSetupTypeDraft('');
                     setOppoSetupProductionOrderDraft('');
                   }}
-                  className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700"
+                  className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:cursor-wait disabled:opacity-60"
                 >
-                  {oppoSetupActorTab === 'PCP' ? 'Enviar Solicitação' : 'Iniciar Setup'}
+                  {isSubmittingOppoSetup
+                    ? 'Enviando...'
+                    : oppoSetupActorTab === 'PCP'
+                      ? 'Enviar Solicitação'
+                      : 'Iniciar Setup'}
                 </button>
               </div>
+                </>
+              )}
             </motion.div>
           </div>
         )}
